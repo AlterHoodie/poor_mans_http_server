@@ -4,6 +4,7 @@
 #include <netinet/in.h> // IP related stuff
 #include <sys/socket.h> // syscalls for interacting with sockets
 #include <sys/epoll.h>
+#include <sys/timerfd.h>
 #include <errno.h>
 #include <unordered_map>
 
@@ -11,6 +12,8 @@
 #include "http/parser.h"
 #include "router/router.h"
 #include "net/socket.h"
+
+constexpr int TIMEOUT = 10;
 
 static size_t parse_content_length(const Request& req) {
     auto it = req.headers.find("Content-Length");
@@ -21,6 +24,14 @@ static size_t parse_content_length(const Request& req) {
     } catch (...) {
         return 0;
     }
+}
+
+bool parse_keep_alive(const Request& req){
+    auto it = req.headers.find("Connection");
+    if (it!=req.headers.end() && it->second=="close"){
+        return false;
+    }
+    return true;
 }
 
 static void pump_connection(Connection& conn, Router& router, int epfd, int fd) {
@@ -36,6 +47,7 @@ static void pump_connection(Connection& conn, Router& router, int epfd, int fd) 
         conn.content_length = parse_content_length(hdr);
         conn.state =
             conn.content_length > 0 ? ConnState::READING_BODY : ConnState::PROCESSING;
+        conn.keep_alive = parse_keep_alive(hdr);
     }
 
     if (conn.state == ConnState::READING_BODY) {
@@ -63,6 +75,26 @@ int main(){
         perror("epoll_create1");
         return 1;
     }
+
+
+    // Create TimerFd instance for checking timeout 
+    int tfd = timerfd_create(CLOCK_MONOTONIC, TFD_NONBLOCK);
+    if (tfd == -1){
+        perror("timerfd_create");
+        return 1;
+    }
+
+    itimerspec ts{};
+    ts.it_interval.tv_sec = 1; // fire every 1s
+    ts.it_value.tv_sec = 1; // first fire in 1s
+
+    if (timerfd_settime(tfd, 0, &ts, nullptr) == -1) {
+        perror("timerfd_settime");
+        return 1;
+    }
+
+    add_epoll_event(epfd, EPOLLIN, tfd);
+    
 
 
     // Create Server
@@ -159,6 +191,26 @@ int main(){
                     
                 }
             }
+            if (fd == tfd){
+                uint64_t expirations;
+                read(tfd,  &expirations, sizeof(expirations));
+                
+                auto now = std::chrono::steady_clock::now();
+
+                for (auto it = conns.begin(); it!=conns.end();){
+                    auto& conn = it->second;
+                    auto idle = std::chrono::duration_cast<std::chrono::seconds>(
+                        now - conn.last_active
+                    ).count();
+                
+                    if (idle > TIMEOUT) {  // 10s idle timeout
+                        close(conn.fd);
+                        it = conns.erase(it);
+                    } else {
+                        ++it;
+                    }
+                            }  
+            }
             else{
                 if(events[i].events & EPOLLIN){
                     auto& conn = conns[fd];
@@ -211,8 +263,24 @@ int main(){
                     // Response Data has been written into the socket
                     if (conn.write_buf.empty()) {
                         conn.state = ConnState::CLOSED;
-                        close(fd);
-                        conns.erase(fd);
+                        if (conn.keep_alive){
+                            //reset connection for next request
+                            conn.read_buf.clear();
+                            conn.write_buf.clear();
+
+                            conn.state = ConnState::READING_HEADERS;
+                            conn.content_length = 0;
+                            conn.body_start = 0;
+
+                            conn.last_active = std::chrono::steady_clock::now();
+
+                            modify_epoll_event(epfd, EPOLLIN, fd);
+
+                        }
+                        else{
+                            close(fd);
+                            conns.erase(fd);
+                        }
                     }
                 }
             }

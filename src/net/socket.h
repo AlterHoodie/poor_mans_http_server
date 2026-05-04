@@ -11,12 +11,22 @@ void add_epoll_event(int &epfd, uint32_t events, int &dfd);
 
 void modify_epoll_event(int &epfd, uint32_t events, int &dfd);
 
+enum class ConnState {
+    READING_HEADERS,
+    READING_BODY,
+    PROCESSING,
+    WRITING,
+    CLOSED
+};
 
-struct Connection{
+struct Connection {
     int fd;
+
     std::string read_buf;
     std::string write_buf;
 
-    bool request_complete = false;
-    bool response_ready = false;
+    ConnState state = ConnState::READING_HEADERS;
+
+    size_t content_length = 0;
+    size_t body_start = 0; // where body begins in read_buf
 };

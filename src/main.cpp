@@ -5,12 +5,55 @@
 #include <sys/socket.h> // syscalls for interacting with sockets
 #include <sys/epoll.h>
 #include <errno.h>
+#include <unordered_map>
 
+#include "http/http_types.h"
 #include "http/parser.h"
-#include "http/request.h"
-#include "http/response.h"
 #include "router/router.h"
 #include "net/socket.h"
+
+static size_t parse_content_length(const Request& req) {
+    auto it = req.headers.find("Content-Length");
+    if (it == req.headers.end())
+        return 0;
+    try {
+        return static_cast<size_t>(std::stoul(it->second));
+    } catch (...) {
+        return 0;
+    }
+}
+
+static void pump_connection(Connection& conn, Router& router, int epfd, int fd) {
+    if (conn.state == ConnState::WRITING || conn.state == ConnState::CLOSED)
+        return;
+
+    if (conn.state == ConnState::READING_HEADERS) {
+        size_t header_end = conn.read_buf.find("\r\n\r\n");
+        if (header_end == std::string::npos)
+            return;
+        conn.body_start = header_end + 4;
+        Request hdr = parse_request(conn.read_buf.substr(0, conn.body_start));
+        conn.content_length = parse_content_length(hdr);
+        conn.state =
+            conn.content_length > 0 ? ConnState::READING_BODY : ConnState::PROCESSING;
+    }
+
+    if (conn.state == ConnState::READING_BODY) {
+        if (conn.read_buf.size() < conn.body_start + conn.content_length)
+            return;
+        conn.state = ConnState::PROCESSING;
+    }
+
+    if (conn.state == ConnState::PROCESSING) {
+        Request req = parse_request(
+            conn.read_buf.substr(0, conn.body_start + conn.content_length));
+        Response res = router.route(req);
+        conn.write_buf = build_response_string(res);
+        conn.read_buf.clear();
+        conn.state = ConnState::WRITING;
+        modify_epoll_event(epfd, EPOLLOUT, fd);
+    }
+}
 
 int main(){
 
@@ -66,7 +109,7 @@ int main(){
     // Initialize Router
     Router router;
 
-    Handler handler = [](const Request &req) {
+    Handler handler = [](const Request&) {
         Response res;
         res.status_code = StatusCode::Ok;
         res.status_text = "OK";
@@ -74,7 +117,16 @@ int main(){
         
         return res;
     };
+    Handler post_handler = [](const Request& req){
+        Response res;
+        res.status_code = StatusCode::Ok;
+        res.status_text = "OK";
+        res.body = req.body;
+        return res;
+    };
+
     router.add_route({HttpMethod::Get, "/"}, handler);
+    router.add_route({HttpMethod::Post, "/"}, post_handler);
     
     std::cout << "Server Listening on Port 8080... \n";
     epoll_event events[1024];
@@ -102,7 +154,8 @@ int main(){
 
                     add_epoll_event(epfd, EPOLLIN, client_fd);
 
-                    conns[client_fd] = Connection{client_fd};
+                    auto ins = conns.emplace(client_fd, Connection{});
+                    ins.first->second.fd = client_fd;
                     
                 }
             }
@@ -114,11 +167,11 @@ int main(){
 
                     while (true){
                         // Reading from fd and storing result in Connections Read Buffer
-                        ssize_t n = read(fd, buffer, sizeof(buffer));
+                        ssize_t nr = read(fd, buffer, sizeof(buffer));
 
-                        if (n > 0){
-                            conn.read_buf.append(buffer,n);
-                        } else if(n == 0){
+                        if (nr > 0){
+                            conn.read_buf.append(buffer, static_cast<size_t>(nr));
+                        } else if(nr == 0){
                             // if client closes connection - EOF
                             close(fd);
                             conns.erase(fd);
@@ -135,26 +188,17 @@ int main(){
                         }
 
                     }
-                     // check if request complete
-                    if (conn.read_buf.find("\r\n\r\n") != std::string::npos) {
-                        Request req = parse_request(conn.read_buf);
-                        Response res = router.route(req);
-                    
-                        conn.write_buf = build_response_string(res);
-                    
-                        // switch to write mode
-                        modify_epoll_event(epfd, EPOLLOUT, fd);
-                    }
+                    pump_connection(conn, router, epfd, fd);
                 }
                 if(events[i].events & EPOLLOUT){
                     auto& conn = conns[fd];
 
                     while (!conn.write_buf.empty()) {
                         // Writing whatever is there in write_buf of connection into the fd
-                        ssize_t n = write(fd, conn.write_buf.c_str(), conn.write_buf.size());
+                        ssize_t nw = write(fd, conn.write_buf.c_str(), conn.write_buf.size());
                 
-                        if (n > 0) {
-                            conn.write_buf.erase(0, n);
+                        if (nw > 0) {
+                            conn.write_buf.erase(0, static_cast<size_t>(nw));
                         } else {
                             if (errno == EAGAIN || errno == EWOULDBLOCK)
                                 break;
@@ -166,6 +210,7 @@ int main(){
 
                     // Response Data has been written into the socket
                     if (conn.write_buf.empty()) {
+                        conn.state = ConnState::CLOSED;
                         close(fd);
                         conns.erase(fd);
                     }

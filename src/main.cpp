@@ -190,11 +190,11 @@ int main(){
                     ins.first->second.fd = client_fd;
                     
                 }
-            }
-            if (fd == tfd){
+            } else if (fd == tfd){
                 uint64_t expirations;
-                read(tfd,  &expirations, sizeof(expirations));
-                
+                if (read(tfd, &expirations, sizeof(expirations)) < 0)
+                    continue;
+
                 auto now = std::chrono::steady_clock::now();
 
                 for (auto it = conns.begin(); it!=conns.end();){
@@ -204,14 +204,14 @@ int main(){
                     ).count();
                 
                     if (idle > TIMEOUT) {  // 10s idle timeout
+                        conn.state = ConnState::CLOSED;
                         close(conn.fd);
                         it = conns.erase(it);
                     } else {
                         ++it;
                     }
-                            }  
-            }
-            else{
+                }  
+            } else {
                 if(events[i].events & EPOLLIN){
                     auto& conn = conns[fd];
 
@@ -240,6 +240,8 @@ int main(){
                         }
 
                     }
+                    auto it = conns.find(fd);
+                    if (it == conns.end()) continue;
                     pump_connection(conn, router, epfd, fd);
                 }
                 if(events[i].events & EPOLLOUT){
@@ -262,22 +264,22 @@ int main(){
 
                     // Response Data has been written into the socket
                     if (conn.write_buf.empty()) {
-                        conn.state = ConnState::CLOSED;
                         if (conn.keep_alive){
                             //reset connection for next request
                             conn.read_buf.clear();
                             conn.write_buf.clear();
-
+                            
                             conn.state = ConnState::READING_HEADERS;
                             conn.content_length = 0;
                             conn.body_start = 0;
-
+                            
                             conn.last_active = std::chrono::steady_clock::now();
-
+                            
                             modify_epoll_event(epfd, EPOLLIN, fd);
-
+                            
                         }
                         else{
+                            conn.state = ConnState::CLOSED;
                             close(fd);
                             conns.erase(fd);
                         }

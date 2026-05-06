@@ -67,7 +67,7 @@ This repo was created to learn various systems engineering, profiling and Cpp co
 
 ## Profiling Observations
 
-The profiling flamegraph referenced in the following observations is available in `[flamegraph.svg](flamegraph.svg)`. Please consult it for a visual breakdown of CPU usage during benchmarking of the server. Hot paths are highlighted and help correlate code structure to runtime costs.
+The profiling flamegraph referenced in the following observations is available in [flamegraph.svg](flamegraph.svg). Please consult it for a visual breakdown of CPU usage during benchmarking of the server. Hot paths are highlighted and help correlate code structure to runtime costs.
 
 Benchmark performed using:
 

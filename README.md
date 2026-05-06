@@ -75,6 +75,12 @@ Benchmark performed using:
 wrk -t4 -c100 -d30s http://18.232.66.57:8080/
 ```
 
+To see Memory Usage you can:
+```
+sudo apt install heaptrack-gui
+heaptrack_gui ./heaptrack.server.zst
+```
+
 ### `accept` (~14%)
 
 High `accept()` overhead due to large amounts of short-lived TCP connection churn.

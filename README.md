@@ -189,6 +189,26 @@ The majority of runtime was spent in:
 
 rather than actual HTTP parsing or application logic, this is due to the nature of the test - being high throughput short-lived connections.
 
+
+
+This type of workload is common in high-frequency trading (HFT) systems where applications may process millions of exchange messages every second. At this scale, even small delays caused by syscalls and repeated switching between userspace and kernel space become expensive.
+
+To reduce this overhead, some trading systems use technologies like DPDK which allow applications to talk directly to the network card (NIC), bypassing much of the Linux kernel networking stack. This helps reduce latency and improves performance consistency.
+
+Frameworks like nginx usually do not use this approach because their workloads are dominated by things like:
+
+- TLS encryption
+
+- HTTP parsing
+
+- reverse proxying
+
+- load balancing
+
+- compression
+
+In these cases, the main bottleneck is often application-level processing rather than raw packet handling, so the normal Linux networking stack together with epoll is usually more than fast enough.
+
 ---
 
 ## Quick manual test

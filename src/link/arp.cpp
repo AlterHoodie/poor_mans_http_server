@@ -18,7 +18,8 @@ constexpr std::size_t kArpEthIPv4Pdu = 28;
 
 }  // namespace
 
-ARPHandler::ARPHandler(const mac_addr_t& mac, const ip4_addr_t& ip, EthernetHandler& below) : mac_(mac), ip_(ip), below_(below) {}
+ARPHandler::ARPHandler(const mac_addr_t& mac, const ip4_addr_t& ip, EthernetHandler& eth, ArpCache& cache)
+    : mac_(mac), ip_(ip), eth_(eth), arp_cache_(cache) {}
 
 void ARPHandler::handle_packet(pkt_buff* pkt) {
     if (pkt->len() < kArpEthIPv4Pdu) {
@@ -35,6 +36,10 @@ void ARPHandler::handle_packet(pkt_buff* pkt) {
         arp[4] != kArpHwAddrLenEth || arp[5] != kArpProtoLenIPv4) {
         return;
     }
+
+    // learn sender's IP->MAC regardless of op (useful for both requests and replies)
+    arp_cache_.learn(ip4_addr_t(std::span<const std::uint8_t, 4>(arp + 14, 4)),
+                     mac_addr_t(std::span<const std::uint8_t, 6>(arp + 8,  6)));
 
     const std::uint16_t op =
         (static_cast<std::uint16_t>(arp[6]) << 8) | arp[7];
@@ -72,5 +77,5 @@ ssize_t ARPHandler::transmit(pkt_buff *pkt){
     std::memcpy(req_dst_ip, temp_ip.data(), 4);
 
 
-    return below_.transmit(pkt, temp_mac, EtherType::ARP);
+    return eth_.transmit(pkt, temp_mac, EtherType::ARP);
 }

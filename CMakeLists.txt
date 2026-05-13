@@ -12,6 +12,8 @@ src/core/buff.cpp
 src/core/utils.cpp
 src/link/eth.cpp
 src/link/arp.cpp
+src/net/ip.cpp
+src/net/icmp.cpp
 src/main.cpp
 )
 

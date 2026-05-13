@@ -13,6 +13,10 @@ struct pkt_buff{
 
     uint8_t *end;
 
+    // filled by the IP layer before it strips its header
+    uint8_t ip_src[4]{};
+    uint8_t ip_dst[4]{};
+
     std::size_t len() const {
         return tail - data;
     }
@@ -30,3 +34,4 @@ bool pull(pkt_buff* b, std::size_t len);
 bool push(pkt_buff* b, std::size_t len);
 
 pkt_buff* create_buffer();
+void delete_buffer(pkt_buff* buff);

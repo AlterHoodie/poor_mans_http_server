@@ -8,6 +8,7 @@
 #include <iomanip>
 #include <ostream>
 #include <span>
+#include <sys/types.h>
 
 struct mac_addr_t {
     std::array<std::uint8_t, 6> bytes{};
@@ -58,14 +59,6 @@ struct ip4_addr_t {
                          std::uint8_t d) noexcept
         : bytes{a, b, c, d} {}
 
-    /// Interpret \p addr_be as a big-endian / network-order IPv4 value (high byte = first octet).
-    [[nodiscard]] static constexpr ip4_addr_t from_network_order(std::uint32_t addr_be) noexcept {
-        return ip4_addr_t(static_cast<std::uint8_t>((addr_be >> 24) & 0xff),
-                          static_cast<std::uint8_t>((addr_be >> 16) & 0xff),
-                          static_cast<std::uint8_t>((addr_be >> 8) & 0xff),
-                          static_cast<std::uint8_t>(addr_be & 0xff));
-    }
-
     [[nodiscard]] const std::uint8_t* data() const noexcept { return bytes.data(); }
     [[nodiscard]] std::uint8_t* data() noexcept { return bytes.data(); }
 
@@ -104,6 +97,26 @@ inline std::ostream& operator<<(std::ostream& os, const ip4_addr_t& a) {
     }
     return os;
 }
+
+enum class IPVersion : std::uint32_t {
+    IPv4 = 0x00000004,
+    IPv6 = 0x00000006,
+};
+
+struct ip_ver_t{
+    uint8_t bytes;
+
+    ip_ver_t() = default;
+
+    explicit ip_ver_t(uint8_t* p) { bytes = (*p >> 4) & 0x0F;};
+
+    [[nodiscard]] const std::uint8_t* data() const noexcept { return &bytes; }
+    [[nodiscard]] std::uint8_t* data() noexcept { return &bytes; }
+
+    [[nodiscard]] bool is_ip4() noexcept {return bytes == 4;};
+    [[nodiscard]] bool is_ip6() noexcept {return bytes == 6;};
+    
+};
 
 namespace std {
 

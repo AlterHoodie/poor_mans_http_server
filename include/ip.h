@@ -28,7 +28,7 @@ class IPHandler: public ProtocolHandler{
         ~IPHandler() = default;
 
         void handle_packet(pkt_buff* pkt) override;
-        ssize_t transmit(pkt_buff* pkt, uint8_t proto);
+        ssize_t transmit(pkt_buff* pkt, IPProto proto);
 
         void register_protocol(uint8_t ip_proto, ProtocolHandler& proto);
         ProtocolHandler* get_handler(uint8_t ip_proto);

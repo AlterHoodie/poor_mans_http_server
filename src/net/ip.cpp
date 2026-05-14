@@ -61,7 +61,7 @@ void IPHandler::handle_packet(pkt_buff* pkt) {
     handler->handle_packet(pkt);
 }
 
-ssize_t IPHandler::transmit(pkt_buff* pkt, uint8_t proto) {
+ssize_t IPHandler::transmit(pkt_buff* pkt, IPProto proto) {
     constexpr uint8_t IHL        = 5;
     constexpr uint8_t IP_HDR_LEN = IHL * 4;  // 20
 
@@ -82,7 +82,7 @@ ssize_t IPHandler::transmit(pkt_buff* pkt, uint8_t proto) {
     ip[4] = ip[5] = 0;                                               // identification
     ip[6] = ip[7] = 0;                                               // flags + fragment offset
     ip[8] = 64;                                                      // TTL
-    ip[9] = proto;
+    ip[9] = static_cast<uint8_t>(proto);
     ip[10] = ip[11] = 0;                                             // checksum = 0 before compute
     std::memcpy(ip + 12, ip_.data(),  4);                            // src = our IP
     std::memcpy(ip + 16, dst.data(),  4);                            // dst = original sender

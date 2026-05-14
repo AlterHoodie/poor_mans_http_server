@@ -60,5 +60,5 @@ ssize_t ICMPHandler::transmit(pkt_buff* pkt) {
     const uint16_t csum = htons(internet_checksum(icmp, pkt->len()));
     std::memcpy(icmp + 2, &csum, 2);
 
-    return ip_.transmit(pkt, static_cast<uint8_t>(IPProto::ICMP));
+    return ip_.transmit(pkt, IPProto::ICMP);
 }

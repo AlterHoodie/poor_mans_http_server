@@ -14,7 +14,10 @@ src/link/eth.cpp
 src/link/arp.cpp
 src/net/ip.cpp
 src/net/icmp.cpp
+src/transport/tcp.cpp
 src/main.cpp
+src/router/router.cpp
+src/http/parser.cpp
 )
 
 target_include_directories(stack PRIVATE include)

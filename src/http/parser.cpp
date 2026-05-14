@@ -8,6 +8,7 @@
 
 
 Request parse_request(const std::string& raw) {
+
     Request req;
     std::string delimiter = "\r\n";
 

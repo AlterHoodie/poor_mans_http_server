@@ -1,4 +1,5 @@
 #include "router.h"
+#include "http_types.h"
 
 void Router::add_route(const RouteKey& key, Handler handler) {
     routes[key] = std::move(handler);
@@ -14,6 +15,7 @@ static Response not_found() {
 }
 
 Response Router::route(const Request& req) {
+
     RouteKey key{req.method, req.path};
     auto it = routes.find(key);
 

@@ -130,8 +130,8 @@ public:
     ssize_t transmit(pkt_buff* pkt, TCPSocket& socket, TCPFlags flags);
 
     int     tcp_socket();
-    int     tcp_bind(int fd, ip4_addr_t ip, uint16_t port);
-    int     tcp_listen(int fd, int backlog);
+    int     tcp_bind(int fd, uint16_t port);
+    int     tcp_listen(int fd);
     int     tcp_accept(int fd);                        // -1 = queue empty
     ssize_t tcp_send(int fd, const void* buf, size_t len);
     // recv: >0 bytes; 0 = FIN and queue drained; -1 + EAGAIN = no payload yet; -1 + EBADF bad fd

@@ -329,7 +329,7 @@ int TCPHandler::tcp_socket(){
     return socket.event_fd;
 }
 
-int TCPHandler::tcp_bind(int fd, ip4_addr_t ip, uint16_t port){
+int TCPHandler::tcp_bind(int fd, uint16_t port){
     auto it = fd_table_.find(fd);
     if(it == fd_table_.end()) throw std::runtime_error("Could Not find Socket to bind");
 
@@ -440,7 +440,7 @@ int TCPHandler::tcp_close(int fd){
     return -1;
 }
 
-int TCPHandler::tcp_listen(int fd, int backlog){
+int TCPHandler::tcp_listen(int fd){
     auto it1 = fd_table_.find(fd);
     if(it1 == fd_table_.end()) return -1;
     

@@ -26,7 +26,7 @@ void EthernetHandler::handle_packet(pkt_buff* buff){
     */
 
     // validate minimum header size
-    if ((buff->tail - buff->data) < ETH_HEADER_SIZE){
+    if ((buff->len()) < ETH_HEADER_SIZE){
         return;
     }
 
@@ -35,7 +35,6 @@ void EthernetHandler::handle_packet(pkt_buff* buff){
 
     // field views
     uint8_t* dst_mac = frame;
-    uint8_t* src_mac = frame + 6;
 
     // avoid alignment issues:
     // manually reconstruct EtherType from bytes (EtherType present in 0 and 1 bytes)

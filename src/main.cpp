@@ -23,7 +23,7 @@
 #include "utils.h"
 #include "router.h"
 
-void pump_connection(HTTPConnection &conn, Router &router, int fd){
+void pump_connection(HTTPConnection &conn, Router &router){
     if (conn.state == HTTPState::WRITING || conn.state == HTTPState::CLOSED) return;
 
     if (conn.state == HTTPState::READING_HEADERS){
@@ -77,10 +77,10 @@ int main(){
     int ret;
     int listen_fd = tcp_handler.tcp_socket();
 
-    ret = tcp_handler.tcp_bind(listen_fd, ip, 80);
+    ret = tcp_handler.tcp_bind(listen_fd, 80);
     if (ret<0) throw std::runtime_error("Couldnt bind port to socket");
 
-    ret = tcp_handler.tcp_listen(listen_fd, 1024);
+    ret = tcp_handler.tcp_listen(listen_fd);
     if (ret<0) throw std::runtime_error("Couldnt create listen socket");
     
     loop.add_event(tapfd,     EPOLLIN);
@@ -140,11 +140,11 @@ int main(){
                 }
                 conn.read_buf.append(buf, static_cast<size_t>(nr));
 
-                pump_connection(conn, router, fd);
+                pump_connection(conn, router);
 
                 if (conn.state == HTTPState::WRITING){
 
-                    ssize_t nw = tcp_handler.tcp_send(fd, conn.write_buf.c_str(), conn.write_buf.size());
+                    tcp_handler.tcp_send(fd, conn.write_buf.c_str(), conn.write_buf.size());
 
                     conn.write_buf.clear();
                     conn.state = HTTPState::CLOSED;

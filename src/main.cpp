@@ -1,10 +1,14 @@
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
+#include <rte_common.h>
 #include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <unordered_map>
+#include <rte_eal.h>
+#include <rte_common.h>
 
 #include "arp.h"
 #include "arp_cache.h"
@@ -18,7 +22,7 @@
 #include "parser.h"
 #include "request.h"
 #include "response.h"
-#include "tap.h"
+#include "dpdk.h"
 #include "tcp.h"
 #include "utils.h"
 #include "router.h"
@@ -52,19 +56,27 @@ void pump_connection(HTTPConnection &conn, Router &router){
     }
 }
 
-int main(){
+int main(int argc, char *argv[]){
+    int retval;
+
+    retval = rte_eal_init(argc, argv);
+	if (retval<0){
+		rte_exit(EXIT_FAILURE, "EAL Failed to init\n");
+	}
+
     EventLoop loop = EventLoop();
-    Tap tap = Tap("tap0");
-    int tapfd = tap.fd();
-    const uint8_t* x = tap.mac();
-    mac_addr_t tap_mac(x);
-    ip4_addr_t ip(192, 0, 2, 2);
+    Dpdk dpdk;
+    const uint8_t* x = dpdk.mac();
+    mac_addr_t mac(x);
+    ip4_addr_t ip(192, 168, 29, 36);
     print_mac(x);
+
+    buff_pool_init(dpdk.pool());
 
     ArpCache arp_cache;
 
-    EthernetHandler eth_handler(tap_mac, tap);
-    ARPHandler  arp_handler(tap_mac, ip, eth_handler, arp_cache);
+    EthernetHandler eth_handler(mac, dpdk);
+    ARPHandler  arp_handler(mac, ip, eth_handler, arp_cache);
     IPHandler   ip_handler(ip, eth_handler, arp_cache);
     ICMPHandler icmp_handler(ip_handler);
     TCPHandler  tcp_handler(ip_handler);
@@ -78,12 +90,11 @@ int main(){
     int listen_fd = tcp_handler.tcp_socket();
 
     ret = tcp_handler.tcp_bind(listen_fd, 80);
-    if (ret<0) throw std::runtime_error("Couldnt bind port to socket");
+    if (ret<0) rte_exit(EXIT_FAILURE,"Couldnt bind port to socket");
 
     ret = tcp_handler.tcp_listen(listen_fd);
-    if (ret<0) throw std::runtime_error("Couldnt create listen socket");
+    if (ret<0) rte_exit(EXIT_FAILURE,"Couldnt create listen socket");
     
-    loop.add_event(tapfd,     EPOLLIN);
     loop.add_event(listen_fd, EPOLLIN);
 
     Router router{};
@@ -102,24 +113,15 @@ int main(){
     std::unordered_map<int, HTTPConnection> conns;
 
     while(true){
-        int n = loop.poll();
+        auto pkt = dpdk.recv_pkt();
+        if (pkt) eth_handler.handle_packet(pkt.get());
+
+        int n = loop.poll(0);
 
         for(int i = 0; i < n; i++){
             epoll_event event = loop.get_event(i);
             int fd = event.data.fd;
-            if (fd == tapfd){
-                auto buff_u = create_buffer();
-                pkt_buff* buff = buff_u.get();
-                if(!buff) continue;
-
-                ssize_t bytes_read = tap.recv(buff->data, (buff->end - buff->data));
-                if (bytes_read <= 0){
-                    continue;
-                }
-
-                buff->tail += bytes_read;
-                eth_handler.handle_packet(buff);
-            } else if (fd == listen_fd){
+            if (fd == listen_fd){
                 int client_fd = tcp_handler.tcp_accept(listen_fd);
                 if (client_fd >=0){
                     loop.add_event(client_fd, EPOLLIN);

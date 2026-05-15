@@ -1,7 +1,13 @@
 #include <cstdint>
 #include <cstdlib>
+#include <rte_mbuf.h>
+#include <rte_mbuf_core.h>
+#include <stdexcept>
 
 #include "buff.h"
+
+static rte_mempool* g_pool = nullptr;
+
 
 uint8_t *push_pointer(uint8_t *ptr, int len){
     return ptr+len;
@@ -9,27 +15,30 @@ uint8_t *push_pointer(uint8_t *ptr, int len){
 
 void delete_buffer(pkt_buff *buff){
     if(buff){
-        if (buff->head) free(buff->head);
-        free(buff);
+        if (buff->native_handle) rte_pktmbuf_free(buff->native_handle);
+        delete buff;
     }
 }
 
-pkt_buff_ptr create_buffer(){
+void buff_pool_init(rte_mempool* pool) {
+    g_pool = pool;
+}
 
-    // TODO: Change this pkt buff pool arenas, 
-    pkt_buff *buff = static_cast<pkt_buff*>(malloc(sizeof(pkt_buff)));
+pkt_buff_ptr create_buffer(){
+    if (!g_pool) throw std::runtime_error("DPDK Memory Pool not initialized");
+
+    rte_mbuf* m_buf = rte_pktmbuf_alloc(g_pool);
+    if (!m_buf) return {nullptr, delete_buffer};
+
+    pkt_buff *buff = new pkt_buff{};
     if (!buff) return pkt_buff_ptr(nullptr,delete_buffer);
 
-    uint8_t *mem = static_cast<uint8_t*>(malloc(PKT_ALLOCATION_SIZE));
-    if (!mem) {
-        free(buff);
-        return pkt_buff_ptr(nullptr,delete_buffer);
-    }
-
-    buff->head = mem;
-    buff->data = push_pointer(mem, 128);
-    buff->tail = buff->data;
-    buff->end = push_pointer(mem, PKT_ALLOCATION_SIZE);
+    uint8_t* base = static_cast<uint8_t*>(m_buf->buf_addr);
+    buff->head = base;
+    buff->data = rte_pktmbuf_mtod(m_buf, uint8_t*);
+    buff->tail = buff->data + m_buf->data_len;
+    buff->end = buff->data + m_buf->buf_len;
+    buff->native_handle = m_buf;
 
     return pkt_buff_ptr(buff, delete_buffer);
 }

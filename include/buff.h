@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 
@@ -13,6 +14,8 @@ struct pkt_buff{
     uint8_t *tail;
 
     uint8_t *end;
+
+    struct rte_mbuf *native_handle = nullptr;
 
     // filled by the IP layer before it strips its header
     uint8_t ip_src[4]{};
@@ -36,4 +39,5 @@ bool push(pkt_buff* b, std::size_t len);
 
 using pkt_buff_ptr = std::unique_ptr<pkt_buff, void(*)(pkt_buff*)>;
 pkt_buff_ptr create_buffer();
-void delete_buffer();
+void delete_buffer(pkt_buff* buff);
+void buff_pool_init(struct rte_mempool* pool);

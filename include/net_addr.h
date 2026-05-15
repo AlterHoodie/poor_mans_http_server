@@ -42,6 +42,10 @@ struct mac_addr_t {
     }
 
     auto operator<=>(const mac_addr_t&) const = default;
+
+    auto operator=(const std::uint8_t* p){
+        std::copy_n(p, 6, bytes.begin());
+    }
 };
 
 struct ip4_addr_t {

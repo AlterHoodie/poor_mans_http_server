@@ -8,7 +8,7 @@
 #include <cstring>
 #include <span>
 #include <sys/types.h>
-EthernetHandler::EthernetHandler(const mac_addr_t& eth_local_mac, Tap& below)
+EthernetHandler::EthernetHandler(const mac_addr_t& eth_local_mac, Dpdk& below)
     : eth_local_mac_(eth_local_mac), below_(below)
 {}
 

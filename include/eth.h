@@ -4,9 +4,9 @@
 #include <unordered_map>
 
 #include "buff.h"
+#include "dpdk.h"
 #include "handler.h"
 #include "net_addr.h"
-#include "tap.h"
 
 
 enum class EtherType : std::uint16_t {
@@ -21,10 +21,10 @@ class EthernetHandler:public ProtocolHandler{
     private:
         mac_addr_t eth_local_mac_;
         std::unordered_map<uint16_t, ProtocolHandler*> eth_handler_reg_;
-        Tap& below_;
+        Dpdk& below_;
 
     public:
-        EthernetHandler(const mac_addr_t& eth_local_mac, Tap& below);
+        EthernetHandler(const mac_addr_t& eth_local_mac, Dpdk& below);
         ~EthernetHandler() = default;
 
         void handle_packet(pkt_buff* buff) override;

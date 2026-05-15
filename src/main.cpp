@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <rte_common.h>
-#include <stdexcept>
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <unordered_map>

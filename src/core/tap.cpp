@@ -19,9 +19,7 @@ Tap::Tap(const std::string& ifname): fd_(-1),ifname_(ifname)
 }
 
 Tap::~Tap(){
-    if(fd_>=0){
-        close(fd_);
-    }
+    if(fd_>=0) close(fd_);
 }
 
 void Tap::setupTap(){
@@ -85,7 +83,7 @@ void Tap::readMacAddr(){
         throw std::runtime_error("SIOCGIFHWADDR failed");
     }
 
-    close(sock);
+    if (sock>=0) close(sock);
 
     for (int i = 0; i < 6; ++i){
         mac_[static_cast<size_t>(i)] =

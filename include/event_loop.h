@@ -11,10 +11,10 @@ class EventLoop{
         EventLoop();
         ~EventLoop();
 
-        void add_event(int &fd, uint32_t events);
-        void modify_event(int &fd, uint32_t events);
-        void delete_event(int &fd);
+        int add_event(int &fd, uint32_t events);
+        int modify_event(int &fd, uint32_t events);
+        int delete_event(int &fd);
         
         int poll(int timeout = -1);
-        epoll_event get_event(int n);
+        const epoll_event& get_event(int n);
 };  

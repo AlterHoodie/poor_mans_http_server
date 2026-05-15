@@ -49,9 +49,9 @@ struct ip4_addr_t {
 
     ip4_addr_t() = default;
 
-    explicit ip4_addr_t(const std::uint8_t* p) { std::copy_n(p, 4, bytes.begin()); }
+    explicit ip4_addr_t(const std::uint8_t* p) noexcept { std::copy_n(p, 4, bytes.begin()); }
 
-    explicit ip4_addr_t(std::span<const std::uint8_t, 4> s) {
+    explicit ip4_addr_t(std::span<const std::uint8_t, 4> s) noexcept {
         std::copy(s.begin(), s.end(), bytes.begin());
     }
 
@@ -113,8 +113,8 @@ struct ip_ver_t{
     [[nodiscard]] const std::uint8_t* data() const noexcept { return &bytes; }
     [[nodiscard]] std::uint8_t* data() noexcept { return &bytes; }
 
-    [[nodiscard]] bool is_ip4() noexcept {return bytes == 4;};
-    [[nodiscard]] bool is_ip6() noexcept {return bytes == 6;};
+    [[nodiscard]] bool is_ip4() const noexcept {return bytes == 4;};
+    [[nodiscard]] bool is_ip6() const noexcept {return bytes == 6;};
     
 };
 

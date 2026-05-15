@@ -6,15 +6,14 @@
 
 #include <cstdint>
 #include <cstring>
-#include <iostream>
 #include <span>
 #include <sys/types.h>
 EthernetHandler::EthernetHandler(const mac_addr_t& eth_local_mac, Tap& below)
     : eth_local_mac_(eth_local_mac), below_(below)
 {}
 
-void EthernetHandler::register_protocol(uint16_t ether_type, ProtocolHandler* handler){
-    eth_handler_reg_[ether_type] = handler;
+void EthernetHandler::register_protocol(uint16_t ether_type, ProtocolHandler& handler){
+    eth_handler_reg_[ether_type] = &handler;
 }
 
 void EthernetHandler::handle_packet(pkt_buff* buff){
@@ -44,18 +43,14 @@ void EthernetHandler::handle_packet(pkt_buff* buff){
         (static_cast<uint16_t>(frame[12]) << 8) |
          static_cast<uint16_t>(frame[13]);
     
-    print_ether(src_mac,dst_mac,ether_type);
-
     // validate destination mac
     mac_addr_t dst_mac_addr(std::span<const std::uint8_t, 6>(dst_mac, 6));
     if (!validate_dst_mac(dst_mac_addr)){
-        std::cout<<"Failed Destination Mac validation\n";
         return;
     }
 
     // validate supported protocol
     if (!validate_ether_type(ether_type)){
-        std::cout<<"Failed Ether type validation\n";
         return;
     }
 

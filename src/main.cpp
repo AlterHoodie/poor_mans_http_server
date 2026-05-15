@@ -5,7 +5,6 @@
 #include <sys/epoll.h>
 #include <sys/types.h>
 #include <unordered_map>
-#include <iostream>
 
 #include "arp.h"
 #include "arp_cache.h"
@@ -23,17 +22,6 @@
 #include "tcp.h"
 #include "utils.h"
 #include "router.h"
-
-static size_t parse_content_length(const Request& req) {
-    auto it = req.headers.find("Content-Length");
-    if (it == req.headers.end())
-        return 0;
-    try {
-        return static_cast<size_t>(std::stoul(it->second));
-    } catch (...) {
-        return 0;
-    }
-}
 
 void pump_connection(HTTPConnection &conn, Router &router, int fd){
     if (conn.state == HTTPState::WRITING || conn.state == HTTPState::CLOSED) return;
@@ -81,8 +69,8 @@ int main(){
     ICMPHandler icmp_handler(ip_handler);
     TCPHandler  tcp_handler(ip_handler);
 
-    eth_handler.register_protocol(0x0806, &arp_handler);
-    eth_handler.register_protocol(0x0800, &ip_handler);
+    eth_handler.register_protocol(0x0806, arp_handler);
+    eth_handler.register_protocol(0x0800, ip_handler);
     ip_handler.register_protocol(static_cast<uint8_t>(IPProto::ICMP), icmp_handler);
     ip_handler.register_protocol(static_cast<uint8_t>(IPProto::TCP),  tcp_handler);
 
@@ -90,10 +78,10 @@ int main(){
     int listen_fd = tcp_handler.tcp_socket();
 
     ret = tcp_handler.tcp_bind(listen_fd, ip, 80);
-    if (ret<0) std::runtime_error("Couldnt bind port to socket");
+    if (ret<0) throw std::runtime_error("Couldnt bind port to socket");
 
     ret = tcp_handler.tcp_listen(listen_fd, 1024);
-    if (ret<0) std::runtime_error("Couldnt create listen socket");
+    if (ret<0) throw std::runtime_error("Couldnt create listen socket");
     
     loop.add_event(tapfd,     EPOLLIN);
     loop.add_event(listen_fd, EPOLLIN);
@@ -115,20 +103,20 @@ int main(){
             epoll_event event = loop.get_event(i);
             int fd = event.data.fd;
             if (fd == tapfd){
-                pkt_buff* buff = create_buffer();
+                auto buff_u = create_buffer();
+                pkt_buff* buff = buff_u.get();
+                if(!buff) continue;
+
                 ssize_t bytes_read = tap.recv(buff->data, (buff->end - buff->data));
                 if (bytes_read <= 0){
-                    delete_buffer(buff);
                     continue;
                 }
 
                 buff->tail += bytes_read;
                 eth_handler.handle_packet(buff);
-                delete_buffer(buff);
             } else if (fd == listen_fd){
                 int client_fd = tcp_handler.tcp_accept(listen_fd);
                 if (client_fd >=0){
-                    std::cout<<"created socket connection\n";
                     loop.add_event(client_fd, EPOLLIN);
                     
                     HTTPConnection conn{};
@@ -151,7 +139,6 @@ int main(){
                     continue;
                 }
                 conn.read_buf.append(buf, static_cast<size_t>(nr));
-                std::cout << conn.read_buf << "\n";
 
                 pump_connection(conn, router, fd);
 

@@ -29,7 +29,7 @@ class EthernetHandler:public ProtocolHandler{
 
         void handle_packet(pkt_buff* buff) override;
         ssize_t transmit(pkt_buff* buff, const mac_addr_t &dst_mac, EtherType ether_type);
-        void register_protocol(uint16_t ether_type, ProtocolHandler* handler);
+        void register_protocol(uint16_t ether_type, ProtocolHandler& handler);
 
         bool validate_dst_mac(const mac_addr_t& mac_addr);
         bool validate_ether_type(uint16_t ether_type);

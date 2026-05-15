@@ -20,4 +20,9 @@ src/router/router.cpp
 src/http/parser.cpp
 )
 
+if(MSVC)
+  target_compile_options(stack PRIVATE /W4 /WX)
+else()
+  target_compile_options(stack PRIVATE -Wall -Wextra -Wpedantic -Werror)
+endif()
 target_include_directories(stack PRIVATE include)

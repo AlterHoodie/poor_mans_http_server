@@ -47,18 +47,6 @@ void print_mac(const uint8_t *x){
     std::cout << std::dec << std::setfill(' ') << std::setw(0) << '\n';
 }
 
-void print_ether(uint8_t *dst_mac, uint8_t *src_mac, uint16_t ether_type){
-    printf("--------------------------\n");
-    std::cout<< "Recieved Ethernet Frame\n";
-    std::cout<<"Src ";
-    print_mac(static_cast<const uint8_t*>(src_mac));
-    std::cout<<"Dst ";
-    print_mac(static_cast<const uint8_t*>(dst_mac));
-    
-    printf("Ether Type: %x\n", ether_type);
-    printf("--------------------------\n");
-}
-
 /*
  * Internet checksum (RFC 1071 style): used by IPv4 (header only) and ICMP (whole message).
  *

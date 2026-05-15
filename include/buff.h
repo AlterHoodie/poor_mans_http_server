@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 
 #define PKT_ALLOCATION_SIZE 2048
 
@@ -33,5 +34,6 @@ struct pkt_buff{
 bool pull(pkt_buff* b, std::size_t len);
 bool push(pkt_buff* b, std::size_t len);
 
-pkt_buff* create_buffer();
-void delete_buffer(pkt_buff* buff);
+using pkt_buff_ptr = std::unique_ptr<pkt_buff, void(*)(pkt_buff*)>;
+pkt_buff_ptr create_buffer();
+void delete_buffer();

@@ -74,6 +74,17 @@ Request parse_request(const std::string& raw) {
     return req;
 }
 
+size_t parse_content_length(const Request& req) {
+    auto it = req.headers.find("Content-Length");
+    if (it == req.headers.end())
+        return 0;
+    try {
+        return static_cast<size_t>(std::stoul(it->second));
+    } catch (...) {
+        return 0;
+    }
+}
+
 
 std::string build_response_string(const Response &res) {
     std::string delimiter = "\r\n";

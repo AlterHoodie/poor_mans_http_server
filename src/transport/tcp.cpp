@@ -331,7 +331,7 @@ int TCPHandler::tcp_socket(){
 
 int TCPHandler::tcp_bind(int fd, ip4_addr_t ip, uint16_t port){
     auto it = fd_table_.find(fd);
-    if(it == fd_table_.end()) std::runtime_error("Could Not find Socket to bind");
+    if(it == fd_table_.end()) throw std::runtime_error("Could Not find Socket to bind");
 
     it->second.key.dst_port = port;
 
@@ -399,7 +399,8 @@ ssize_t TCPHandler::tcp_recv(int fd, void* buf, size_t len){
 }
 
 ssize_t TCPHandler::send_segment(TCPSocket& socket, TCPFlags flags){
-    pkt_buff *pkt = create_buffer();
+    auto buff_u = create_buffer();
+    pkt_buff* pkt = buff_u.get();
 
     pkt->data = pkt->head + 34;
     pkt->tail = pkt->data;
@@ -408,7 +409,6 @@ ssize_t TCPHandler::send_segment(TCPSocket& socket, TCPFlags flags){
     std::memcpy(pkt->ip_dst, socket.key.dst_ip.data(), 4);
 
     ssize_t r = transmit(pkt, socket, flags);
-    delete_buffer(pkt);
 
     return r;
 }
@@ -427,23 +427,20 @@ int TCPHandler::tcp_close(int fd){
     if (socket.state == TCPState::ESTABLISHED){
         socket.snd_nxt+=1;
         socket.state = TCPState::FIN_WAIT_1;
-        return send_segment(socket, TCPFlags::FIN | TCPFlags::ACK);
-        return 0;
+        const ssize_t n = send_segment(socket, TCPFlags::FIN | TCPFlags::ACK);
+        return n>=0? 0:-1;
     }
     if (socket.state == TCPState::CLOSE_WAIT){
         socket.snd_nxt+=1;
         socket.state = TCPState::LAST_ACK;
-        return send_segment(socket, TCPFlags::FIN | TCPFlags::ACK);
-        return 0;
+        const ssize_t n = send_segment(socket, TCPFlags::FIN | TCPFlags::ACK);
+        return n>=0? 0:-1;
     }
 
     return -1;
 }
 
 int TCPHandler::tcp_listen(int fd, int backlog){
-    auto it = listen_table_.find(fd);
-    if(it != listen_table_.end()) return -1;
-
     auto it1 = fd_table_.find(fd);
     if(it1 == fd_table_.end()) return -1;
     

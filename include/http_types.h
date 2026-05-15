@@ -68,7 +68,7 @@ inline const char* default_status_text(StatusCode code) {
 }
 
 
-enum HTTPState{
+enum class HTTPState{
     READING_HEADERS,
     READING_BODY,
     PROCESSING,

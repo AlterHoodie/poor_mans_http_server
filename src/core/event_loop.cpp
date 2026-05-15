@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include <sys/epoll.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 EventLoop::EventLoop(){
@@ -14,47 +15,39 @@ EventLoop::EventLoop(){
 }
 
 EventLoop::~EventLoop(){
-    close(epfd_);
+    if (epfd_ >=0) close(epfd_);
 }
 
-void EventLoop::add_event(int &fd, uint32_t events){
+int EventLoop::add_event(int &fd, uint32_t events){
     epoll_event ev{};
 
     ev.events = events;
     ev.data.fd = fd;
 
-    int ret = epoll_ctl(
+    return epoll_ctl(
         epfd_,
         EPOLL_CTL_ADD,
         fd,
         &ev
     );
-
-    if (ret<0){
-        throw std::runtime_error("Failed to add event to epoll");
-    }
 }   
 
-void EventLoop::modify_event(int &fd, uint32_t events){
+int EventLoop::modify_event(int &fd, uint32_t events){
     epoll_event ev{};
 
     ev.events = events;
     ev.data.fd = fd;
 
-    int ret = epoll_ctl(
+    return epoll_ctl(
         epfd_,
         EPOLL_CTL_MOD, 
         fd, 
         &ev
     );
-
-    if (ret<0){
-        throw std::runtime_error("Failed to modify fd");
-    }
 }
 
-void EventLoop::delete_event(int &fd){
-    epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+int EventLoop::delete_event(int &fd){
+    return epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
 }
 
 int EventLoop::poll(int timeout){
@@ -71,8 +64,8 @@ int EventLoop::poll(int timeout){
     return ret;
 }
 
-epoll_event EventLoop::get_event(int n){
-    if (n>EPOLL_BUFF_SIZE){
+const epoll_event& EventLoop::get_event(int n){
+    if (n>=EPOLL_BUFF_SIZE){
         throw std::runtime_error("n larger than event buff size");
     }
 

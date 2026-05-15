@@ -8,14 +8,10 @@
 #include <unistd.h>
 
 EventLoop::EventLoop(){
-    epfd_ = epoll_create1(0);
-    if (epfd_==-1){
+    epfd_.reset(::epoll_create1(0));
+    if (epfd_.get() < 0){
         throw std::runtime_error("Failed to Create event loop");
     }
-}
-
-EventLoop::~EventLoop(){
-    if (epfd_ >=0) close(epfd_);
 }
 
 int EventLoop::add_event(int &fd, uint32_t events){
@@ -25,7 +21,7 @@ int EventLoop::add_event(int &fd, uint32_t events){
     ev.data.fd = fd;
 
     return epoll_ctl(
-        epfd_,
+        epfd_.get(),
         EPOLL_CTL_ADD,
         fd,
         &ev
@@ -39,7 +35,7 @@ int EventLoop::modify_event(int &fd, uint32_t events){
     ev.data.fd = fd;
 
     return epoll_ctl(
-        epfd_,
+        epfd_.get(),
         EPOLL_CTL_MOD, 
         fd, 
         &ev
@@ -47,12 +43,12 @@ int EventLoop::modify_event(int &fd, uint32_t events){
 }
 
 int EventLoop::delete_event(int &fd){
-    return epoll_ctl(epfd_, EPOLL_CTL_DEL, fd, nullptr);
+    return epoll_ctl(epfd_.get(), EPOLL_CTL_DEL, fd, nullptr);
 }
 
 int EventLoop::poll(int timeout){
     int ret = epoll_wait(
-        epfd_,
+        epfd_.get(),
         events_,
         EPOLL_BUFF_SIZE,
         timeout

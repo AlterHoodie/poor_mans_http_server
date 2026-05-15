@@ -12,20 +12,16 @@
 #include <linux/if_tun.h>
 #include <net/if.h>
 
-Tap::Tap(const std::string& ifname): fd_(-1),ifname_(ifname)
+Tap::Tap(const std::string& ifname): ifname_(ifname)
 {
     setupTap();
     setNonBlocking();
 }
 
-Tap::~Tap(){
-    if(fd_>=0) close(fd_);
-}
-
 void Tap::setupTap(){
-    fd_ = open("/dev/net/tun", O_RDWR);
+    fd_.reset(::open("/dev/net/tun", O_RDWR));
 
-    if (fd_<0){
+    if (fd_.get() < 0){
         throw std::runtime_error("failed to open /dev/net/tun");
     }
 
@@ -39,8 +35,8 @@ void Tap::setupTap(){
         IFNAMSIZ
     );
 
-    if (ioctl(fd_, TUNSETIFF, &ifr) < 0){
-        close(fd_);
+    if (ioctl(fd_.get(), TUNSETIFF, &ifr) < 0){
+        fd_.reset();
         throw std::runtime_error("TUNSETIFF failed");
     }
 
@@ -49,28 +45,28 @@ void Tap::setupTap(){
 }
 
 void Tap::setNonBlocking(){
-    int flags = fcntl(fd_, F_GETFL, 0);
+    int flags = fcntl(fd_.get(), F_GETFL, 0);
 
     if (flags < 0) {
         throw std::runtime_error("fcntl(F_GETFL) failed");
     }
 
-    if (fcntl(fd_, F_SETFL, flags | O_NONBLOCK) < 0) {
+    if (fcntl(fd_.get(), F_SETFL, flags | O_NONBLOCK) < 0) {
         throw std::runtime_error("fcntl(F_SETFL) failed");
     }
 }
 
 ssize_t Tap::recv(uint8_t* buf, size_t len){
-    return read(fd_, buf, len);
+    return read(fd_.get(), buf, len);
 }
 
 int Tap::fd() const{
-    return fd_;
+    return fd_.get();
 }
 
 void Tap::readMacAddr(){
-    const int sock = socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
-    if (sock < 0){
+    unique_fd sock{::socket(AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0)};
+    if (sock.get() < 0){
         throw std::runtime_error("socket(AF_INET, SOCK_DGRAM) failed for SIOCGIFHWADDR");
     }
 
@@ -78,12 +74,9 @@ void Tap::readMacAddr(){
 
     std::strncpy(ifr.ifr_name, ifname_.c_str(), IFNAMSIZ - 1);
 
-    if (ioctl(sock, SIOCGIFHWADDR, &ifr) < 0){
-        close(sock);
+    if (ioctl(sock.get(), SIOCGIFHWADDR, &ifr) < 0){
         throw std::runtime_error("SIOCGIFHWADDR failed");
     }
-
-    if (sock>=0) close(sock);
 
     for (int i = 0; i < 6; ++i){
         mac_[static_cast<size_t>(i)] =
@@ -92,5 +85,5 @@ void Tap::readMacAddr(){
 }
 
 ssize_t Tap::transmit(pkt_buff *buff){
-    return write(fd_, buff->data, buff->len());
+    return write(fd_.get(), buff->data, buff->len());
 }

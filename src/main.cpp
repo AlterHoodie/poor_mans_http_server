@@ -92,6 +92,11 @@ int main(){
         r.body = "Hello\n";
         return r;
     });
+    router.add_route({HttpMethod::Post, "/hi"}, [](const Request& req) {
+        Response r;
+        r.body = req.body.empty() ? "OK\n" : req.body;
+        return r;
+    });
 
     // outside the loop — track active client fds
     std::unordered_map<int, HTTPConnection> conns;

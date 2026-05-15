@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -243,62 +244,78 @@ ssize_t TCPHandler::transmit(pkt_buff* pkt, TCPSocket& socket, TCPFlags flags) {
     constexpr uint8_t  DATA_OFFSET = 5 << 4;   // 20-byte header, no options
     constexpr uint16_t WINDOW      = 65535;
 
-    // Trim packet to exactly 20 bytes (drop any incoming options/payload)
-    pkt->tail = pkt->data + 20;
+    uint8_t       pseudo[12];
+    auto&         send_data = socket.send_buf.data;
 
-    // Ports (big-endian) — swapped: we reply from dst back to src
-    uint16_t sp = htons(socket.key.dst_port);
-    uint16_t dp = htons(socket.key.src_port);
-    std::memcpy(pkt->data,     &sp, 2);
-    std::memcpy(pkt->data + 2, &dp, 2);
+    auto write_tcp_header = [&]() {
+        // Header only; payload is appended after pkt->tail.
+        pkt->tail = pkt->data + 20;
 
-    // Sequence and acknowledgment numbers (big-endian)
-    uint32_t seq = htonl(socket.snd_una);
-    uint32_t ack = htonl(socket.rcv_nxt);
-    std::memcpy(pkt->data + 4, &seq, 4);
-    std::memcpy(pkt->data + 8, &ack, 4);
+        uint16_t sp = htons(socket.key.dst_port);
+        uint16_t dp = htons(socket.key.src_port);
+        std::memcpy(pkt->data,     &sp, 2);
+        std::memcpy(pkt->data + 2, &dp, 2);
 
-    // Data offset + flags
-    pkt->data[12] = DATA_OFFSET;
-    pkt->data[13] = static_cast<uint8_t>(flags);
+        uint32_t seq = htonl(socket.snd_una);
+        uint32_t ack = htonl(socket.rcv_nxt);
+        std::memcpy(pkt->data + 4, &seq, 4);
+        std::memcpy(pkt->data + 8, &ack, 4);
 
-    // Window size (big-endian)
-    uint16_t wnd = htons(WINDOW);
-    std::memcpy(pkt->data + 14, &wnd, 2);
+        pkt->data[12] = DATA_OFFSET;
+        pkt->data[13] = static_cast<uint8_t>(flags);
 
-    // Checksum = 0 before computing
-    pkt->data[16] = 0;
-    pkt->data[17] = 0;
+        uint16_t wnd = htons(WINDOW);
+        std::memcpy(pkt->data + 14, &wnd, 2);
 
-    // Urgent pointer = 0
-    pkt->data[18] = 0;
-    pkt->data[19] = 0;
+        pkt->data[16] = 0;
+        pkt->data[17] = 0;
+        pkt->data[18] = 0;
+        pkt->data[19] = 0;
+    };
 
-    // Append any queued send_buf payload (no retransmit: advance and clear immediately)
-    auto& send_data = socket.send_buf.data;
-    if (!send_data.empty()) {
-        size_t payload_len = std::min(send_data.size(), static_cast<size_t>(pkt->end - pkt->tail));
+    auto finalize_and_send = [&]() -> ssize_t {
+        const uint16_t seg_len = static_cast<uint16_t>(pkt->tail - pkt->data);
+        build_pseudo_header(pseudo, pkt->ip_dst, pkt->ip_src, seg_len);
+        uint16_t csum = htons(tcp_checksum(pseudo, 12, pkt->data, seg_len));
+        std::memcpy(pkt->data + 16, &csum, 2);
+        return below_.transmit(pkt, IPProto::TCP);
+    };
+
+    // SYN/ACK, FIN-only, RST, pure ACK — no queued application data.
+    if (send_data.empty()) {
+        write_tcp_header();
+        return finalize_and_send();
+    }
+
+    // One IP datagram per loop iteration with its own TCP header + seq advancement.
+    ssize_t last_send = 0;
+    while (!send_data.empty()) {
+        write_tcp_header();
+
+        const size_t tailroom = static_cast<size_t>(pkt->end - pkt->tail);
+        const size_t payload_len = std::min(send_data.size(), tailroom);
+        if (payload_len == 0) {
+            return -1;
+        }
+
         uint8_t* dst = pkt->tail;
-        size_t i = 0;
+        size_t   i = 0;
         for (uint8_t b : send_data) {
             if (i >= payload_len) break;
             dst[i++] = b;
         }
         pkt->tail += payload_len;
+
         socket.snd_nxt += static_cast<uint32_t>(payload_len);
-        socket.snd_una  = socket.snd_nxt;
-        send_data.clear();
+        socket.snd_una = socket.snd_nxt;
+
+        last_send = finalize_and_send();
+        if (last_send < 0) return last_send;
+
+        send_data.erase(send_data.begin(), send_data.begin() + static_cast<std::ptrdiff_t>(payload_len));
     }
 
-    // Checksum — pseudo-header uses our IP (ip_dst of original) as src,
-    // peer IP (ip_src of original) as dst, matching the IP header ip.cpp will build.
-    uint16_t seg_len = static_cast<uint16_t>(pkt->tail - pkt->data);
-    uint8_t pseudo[12];
-    build_pseudo_header(pseudo, pkt->ip_dst, pkt->ip_src, seg_len);
-    uint16_t csum = htons(tcp_checksum(pseudo, 12, pkt->data, seg_len));
-    std::memcpy(pkt->data + 16, &csum, 2);
-
-    return below_.transmit(pkt, IPProto::TCP);
+    return last_send;
 }
 
 
@@ -329,6 +346,10 @@ int TCPHandler::tcp_accept(int fd){
     int event_fd = it->second.accept_queue.front();
 
     it->second.accept_queue.pop();
+    // Listen "socket" fd is an eventfd: handle_syn_rcvd wrote +1 to wake epoll. We must read
+    // it back or the counter stays nonzero and level-triggered epoll keeps returning EPOLLIN.
+    uint64_t v = 0;
+    (void)read(fd, &v, sizeof(v));
     return event_fd;
 }
 
@@ -349,12 +370,23 @@ ssize_t TCPHandler::tcp_send(int fd, const void *buf, size_t len){
 
 ssize_t TCPHandler::tcp_recv(int fd, void* buf, size_t len){
     auto it = fd_table_.find(fd);
-    if(it == fd_table_.end()) return -1;
+    if (it == fd_table_.end()) {
+        errno = EBADF;
+        return -1;
+    }
 
     TCPSocket& socket = it->second;
     auto& q = socket.recv_buf.ready;
 
-    if(q.empty()) return -1;
+    if (q.empty()) {
+        // Match non-blocking `read(2)`: EAGAIN when data has not arrived yet; 0 after FIN when
+        // the reassembly queue is drained.
+        if (socket.state == TCPState::CLOSE_WAIT) {
+            return 0;
+        }
+        errno = EAGAIN;
+        return -1;
+    }
 
     auto* out = static_cast<uint8_t*>(buf);
     size_t copied = 0;

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <string>
+#include <cstdint>
 
 enum class HttpMethod {
     Get,
@@ -65,3 +66,24 @@ inline const char* default_status_text(StatusCode code) {
     }
     return "Unknown";
 }
+
+
+enum HTTPState{
+    READING_HEADERS,
+    READING_BODY,
+    PROCESSING,
+    WRITING,
+    CLOSED
+};
+
+struct HTTPConnection{
+    HttpMethod method;
+    std::string path; 
+    HTTPState state {HTTPState::READING_HEADERS};
+    uint16_t content_length;
+    size_t body_start;
+
+    std::string read_buf;
+    std::string write_buf;
+
+};

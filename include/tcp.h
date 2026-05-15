@@ -134,6 +134,7 @@ public:
     int     tcp_listen(int fd, int backlog);
     int     tcp_accept(int fd);                        // -1 = queue empty
     ssize_t tcp_send(int fd, const void* buf, size_t len);
-    ssize_t tcp_recv(int fd, void* buf, size_t len);   // -1 = nothing yet
+    // recv: >0 bytes; 0 = FIN and queue drained; -1 + EAGAIN = no payload yet; -1 + EBADF bad fd
+    ssize_t tcp_recv(int fd, void* buf, size_t len);
     int     tcp_close(int fd);
 };

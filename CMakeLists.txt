@@ -11,7 +11,6 @@ find_package(PkgConfig REQUIRED)
 pkg_check_modules(LIBDPDK REQUIRED IMPORTED_TARGET libdpdk)
 
 add_executable(stack
-src/core/event_loop.cpp
 src/core/dpdk.cpp
 src/core/buff.cpp
 src/core/utils.cpp
@@ -28,7 +27,7 @@ src/http/parser.cpp
 if(MSVC)
   target_compile_options(stack PRIVATE /W4 /WX)
 else()
-  target_compile_options(stack PRIVATE -Wall -Wextra -Wpedantic -Werror -mssse3)
+  target_compile_options(stack PRIVATE -g -O2 -Wall -Wextra -Wpedantic -Werror -mssse3 -fno-omit-frame-pointer)
 endif()
 target_include_directories(stack PRIVATE include)
 target_link_libraries(stack PRIVATE PkgConfig::LIBDPDK)

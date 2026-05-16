@@ -3,10 +3,10 @@
 #include <cstdint>
 #include <deque>
 #include <map>
-#include <queue>
 #include <sys/types.h>
 #include <unordered_map>
 #include <vector>
+#include <functional>
 
 #include "buff.h"
 #include "handler.h"
@@ -75,7 +75,7 @@ struct SendBuff {
 
 struct RecvBuff {
     std::map<uint32_t, std::vector<uint8_t>> out_of_order;
-    std::deque<uint8_t>                      ready;
+    std::vector<uint8_t>                      ready;
     uint32_t                                 base_seq{0};
 };
 
@@ -90,9 +90,12 @@ struct TCPSocket {
     SendBuff send_buf;
     RecvBuff recv_buf;
 
-    std::queue<int> accept_queue;
     int             event_fd{-1};
     int             listen_fd{-1};  // parent listen socket fd (-1 if not a child)
+
+    std::function<void(int)>                         on_accept;
+    std::function<void(const uint8_t*, size_t)>      on_data;
+    std::function<void()>                            on_close;
 };
 
 
@@ -132,9 +135,10 @@ public:
     int     tcp_socket();
     int     tcp_bind(int fd, uint16_t port);
     int     tcp_listen(int fd);
-    int     tcp_accept(int fd);                        // -1 = queue empty
     ssize_t tcp_send(int fd, const void* buf, size_t len);
-    // recv: >0 bytes; 0 = FIN and queue drained; -1 + EAGAIN = no payload yet; -1 + EBADF bad fd
-    ssize_t tcp_recv(int fd, void* buf, size_t len);
     int     tcp_close(int fd);
+
+    void set_on_accept(int fd, std::function<void(int)>cb);
+    void set_on_data  (int fd, std::function<void(const uint8_t*, size_t)>cb);
+    void set_on_close (int fd, std::function<void()>cb);
 };

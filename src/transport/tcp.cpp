@@ -1,4 +1,3 @@
-#include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -66,11 +65,15 @@ void TCPHandler::handle_syn_rcvd(uint8_t flags, uint32_t ack_num, TCPSocket &soc
     socket.state = TCPState::ESTABLISHED;
     socket.snd_una = ack_num;
 
-    TCPSocket &listen_sock = fd_table_[socket.listen_fd];
+    if (socket.event_fd == -1) return;
+    if (socket.listen_fd == -1) return;
+    auto it = fd_table_.find(socket.listen_fd);
+    if (it == fd_table_.end()) return;
 
-    listen_sock.accept_queue.push(socket.event_fd);
-    uint64_t val = 1;
-    write(listen_sock.event_fd, &val, 8);
+    TCPSocket &listen_sock = it->second;
+
+    if (!listen_sock.on_accept) return;
+    listen_sock.on_accept(socket.event_fd);
 
     return;
 }
@@ -87,6 +90,7 @@ void TCPHandler::handle_established(
         socket.state = TCPState::CLOSE_WAIT;
         socket.rcv_nxt+=1;
         transmit(pkt, socket, TCPFlags::ACK);
+        if(socket.on_close) socket.on_close();
         return;
     }
     if (has_flag(flags, TCPFlags::ACK)){
@@ -118,8 +122,11 @@ void TCPHandler::handle_established(
 
         }
 
-        uint64_t val = 1;
-        write(socket.event_fd, &val, 8); 
+        if (socket.on_data) {
+            socket.on_data(socket.recv_buf.ready.data(), socket.recv_buf.ready.size());
+            socket.recv_buf.ready.clear();
+        }
+        
     }else if (seq_num > socket.rcv_nxt) {
         socket.recv_buf.out_of_order[seq_num] = std::vector<uint8_t>(payload, payload + payload_len);
     }
@@ -338,21 +345,6 @@ int TCPHandler::tcp_bind(int fd, uint16_t port){
     return 0;
 }
 
-int TCPHandler::tcp_accept(int fd){
-    auto it = fd_table_.find(fd);
-    if(it == fd_table_.end()) return -1;
-    if(it->second.accept_queue.empty()) return -1;
-
-    int event_fd = it->second.accept_queue.front();
-
-    it->second.accept_queue.pop();
-    // Listen "socket" fd is an eventfd: handle_syn_rcvd wrote +1 to wake epoll. We must read
-    // it back or the counter stays nonzero and level-triggered epoll keeps returning EPOLLIN.
-    uint64_t v = 0;
-    (void)read(fd, &v, sizeof(v));
-    return event_fd;
-}
-
 ssize_t TCPHandler::tcp_send(int fd, const void *buf, size_t len){
     auto it = fd_table_.find(fd);
     if(it == fd_table_.end()) return -1;
@@ -367,36 +359,6 @@ ssize_t TCPHandler::tcp_send(int fd, const void *buf, size_t len){
 
     return static_cast<ssize_t>(len);
 }   
-
-ssize_t TCPHandler::tcp_recv(int fd, void* buf, size_t len){
-    auto it = fd_table_.find(fd);
-    if (it == fd_table_.end()) {
-        errno = EBADF;
-        return -1;
-    }
-
-    TCPSocket& socket = it->second;
-    auto& q = socket.recv_buf.ready;
-
-    if (q.empty()) {
-        // Match non-blocking `read(2)`: EAGAIN when data has not arrived yet; 0 after FIN when
-        // the reassembly queue is drained.
-        if (socket.state == TCPState::CLOSE_WAIT) {
-            return 0;
-        }
-        errno = EAGAIN;
-        return -1;
-    }
-
-    auto* out = static_cast<uint8_t*>(buf);
-    size_t copied = 0;
-    while (copied < len && !q.empty()) {
-        out[copied] = q.front();
-        q.pop_front();
-        ++copied;
-    }
-    return static_cast<ssize_t>(copied);
-}
 
 ssize_t TCPHandler::send_segment(TCPSocket& socket, TCPFlags flags){
     auto buff_u = create_buffer();
@@ -449,4 +411,24 @@ int TCPHandler::tcp_listen(int fd){
     listen_table_[socket.key.dst_port] = fd;
 
     return 0;
+}
+
+void TCPHandler::set_on_accept(int fd, std::function<void(const int fd)> cb){
+    auto it = fd_table_.find(fd);
+    if(it == fd_table_.end()) return;
+    it->second.on_accept = cb;
+}
+
+void TCPHandler::set_on_data(int fd, std::function<void(const uint8_t*, size_t)> foo){
+    auto it = fd_table_.find(fd);
+    if(it == fd_table_.end()) return;
+
+    it->second.on_data = foo;
+}
+
+void TCPHandler::set_on_close(int fd, std::function<void()> foo){
+    auto it = fd_table_.find(fd);
+    if(it == fd_table_.end()) return;
+
+    it->second.on_close = foo;
 }

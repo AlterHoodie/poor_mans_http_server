@@ -1,235 +1,113 @@
 # poor_mans_http_server
 
-A minimal **HTTP/1.1-style TCP server** written in C++17 for Linux. It is deliberately small: one process, **non-blocking sockets**, an **epoll** event loop, a tiny HTTP parser, and a simple method/path router. The goal is to show how a production-style server *conceptually* handles many connections without one thread per client—using the kernel’s readiness notifications instead of blocking on each socket.
-
-**What it does today**
-
-- Listens on **port 8080** (`0.0.0.0`).
-- `**GET /`** → `200 OK` with body `Hello World\n`.
-- `**POST /**` → `200 OK` echoing the request body.
-- Parses request headers and optional body using `Content-Length`.
-- Supports **keep-alive** when the client does not send `Connection: close`; otherwise closes after the response.
+A learning exercise exploring how an HTTP server behaves at different layers of the networking stack. Three branches implement the same `GET /hi → 200 OK` endpoint, each starting I/O at a different level — from the kernel's TCP socket API down to raw Ethernet frames read directly off the NIC.
 
 ---
 
-## Build and run
+## Branch Index
 
-```bash
-make          # produces ./server
-make run      # build (if needed) and run
+| Branch | I/O mechanism | Stack starts at | Req/sec |
+|---|---|---|---|
+| [`l4_impl`](../../tree/l4_impl) | Linux `epoll` + kernel TCP sockets | Layer 4 — kernel owns TCP/IP | **350.89** |
+| [`dpdk`](../../tree/dpdk) | DPDK `rte_eth_rx_burst` — no syscalls | Layer 2 — custom ARP/IP/TCP | 230.58 |
+| [`l2_impl`](../../tree/l2_impl) | Linux TAP device (`tap0`) | Layer 2 — custom ARP/IP/TCP | 59.52 |
+
+`main` is this index only. All source code lives on the branches above.
+
+---
+
+## Stack Comparison
+
+```
+l4_impl                  dpdk                     l2_impl
+─────────────────        ─────────────────        ─────────────────
+epoll / syscalls         NIC (DPDK PMD)           TAP device (tap0)
+       |                        |                        |
+ kernel TCP/IP             Ethernet                 Ethernet
+       |                   /       \                /       \
+     HTTP                ARP        IP            ARP        IP
+                                   /  \                     /  \
+                                ICMP  TCP                ICMP  TCP
+                                       |                        |
+                                     HTTP                     HTTP
 ```
 
-Requires a Linux environment with epoll (e.g. native Linux or WSL2). The code uses POSIX APIs: `epoll`, `timerfd`, `fcntl` for non-blocking I/O.
+`l4_impl` delegates everything below HTTP to the kernel. The other two branches re-implement ARP, IPv4, ICMP, TCP, and HTTP from scratch on top of raw frames.
 
 ---
 
-## Architecture (high level)
+## Benchmark Comparison
 
+All runs: `wrk -t4 -c100 -d30s`, home server, same machine.
 
-| Piece                 | Role                                                                                     |
-| --------------------- | ---------------------------------------------------------------------------------------- |
-| `src/main.cpp`        | Epoll loop, accepts clients, reads/writes, drives connection state machine, idle timeout |
-| `src/net/socket.cpp`  | `set_non_blocking`, `epoll_ctl` helpers (`add_epoll_event`, `modify_epoll_event`)        |
-| `src/net/socket.h`    | `Connection` state (`READING_HEADERS` → … → `WRITING`) and buffers                       |
-| `src/http/parser.*`   | Turn raw bytes into `Request`, build response string                                     |
-| `src/router/router.*` | Map `(HttpMethod, path)` → handler function                                              |
+| Branch | Req/sec | Avg latency | Max latency | Timeouts |
+|---|---|---|---|---|
+| `l4_impl` | **350.89** | 87.26 ms | 1.99 s | 54 |
+| `dpdk` | 230.58 | 239.96 ms | 757.81 ms | 0 |
+| `l2_impl` | 59.52 | 619.12 ms | 1.99 s | 480 |
 
+### Why `l4_impl` wins despite DPDK
 
-Connections are stored in `std::unordered_map<int, Connection>` keyed by client file descriptor.
+Bypassing the kernel eliminates syscall overhead, but it also throws away decades of kernel TCP tuning:
 
----
+- **NAPI** batches interrupt coalescing and packet processing so the kernel already amortises per-packet cost at scale.
+- **TSO/GSO/GRO** offloads let the NIC handle segmentation and reassembly in hardware — the hand-rolled stacks get none of this.
+- The kernel TCP stack has a mature congestion controller, retransmission engine, and receive-window management. The custom stacks lack all of it.
 
-## What is epoll?
+For a workload that is TCP-handshake-heavy (short-lived connections, small payloads), the kernel's maturity outweighs the syscall savings.
 
-**epoll** is a Linux-specific facility for **I/O multiplexing**: you register many file descriptors (sockets, pipes, etc.) with a single **epoll instance**, then **block once** in `epoll_wait` until *something* becomes readable, writable, or signals an error—depending on which events you asked for.
+### Why `l2_impl` is slowest
 
-Compared to older patterns:
-
-- `**select` / `poll`** scale poorly when the number of fds grows (the kernel must scan large fd sets each call).
-- **epoll** is designed for high fan-in: adding an fd and asking “wake me when this socket is readable” is cheap, and `epoll_wait` returns only **ready** fds.
-
-Conceptually you get: **one thread (or a few) can serve thousands of connections** because work is driven by **readiness**: you only read/write when the kernel says the operation won’t block *immediately* (for non-blocking sockets, combined with draining until `EAGAIN`).
-
-**Important details**
-
-- **Level-triggered (default)** vs **edge-triggered** (`EPOLLET`): this project uses default **level-triggered** behavior. If data is still sitting in the socket buffer, epoll will keep reporting readability until you drain it (which matches the “read until `EAGAIN`” loop in the code).
-- epoll is **Linux-only**; other Unix systems use `kqueue` (BSD/macOS), `IOCP` (Windows), etc.
+Every packet crosses the kernel boundary **twice** before reaching userspace: NIC → kernel network stack → TAP fd read → userspace. The custom TCP stack then processes frames that the kernel has already partially handled. This adds both copy overhead and scheduling latency that DPDK avoids entirely — which is why `dpdk` (230 req/s) is still 4× faster than `l2_impl` (59 req/s) even with a weaker TCP implementation.
 
 ---
 
-## PS
+## Key Findings Per Branch
 
-This repo was created to learn various systems engineering, profiling and Cpp concepts and hence proper attention wasnt given to code quality or optimizations.
+### `l4_impl`
 
-- **Single thread**: Simple and correct for learning; a real server might use a thread pool, `SO_REUSEPORT`, or separate accept/worker processes.
-- **Parse/route in the event thread**: Long handlers block everyone; production systems often offload work.
-- **No TLS, HTTP/2, chunked encoding, etc.** — intentionally out of scope for “poor man’s” server.
+Profiled with `perf` + flamegraph. Hottest paths:
 
-## Profiling Observations
+- **`epoll_wait` (~26.8%)** — expected for event-driven I/O; the process spends most time blocked waiting for readiness.
+- **`accept` (~14%)** — short-lived connection churn forces a full TCP handshake + fd allocation per request. Keep-alive would shift this cost to memory.
+- **`unordered_map` (~18.3%)** — the connection table is in the hot path. File descriptors are already integers; a flat array indexed by fd would eliminate hashing and pointer chasing.
+- **`pump_connection` (~9.9%)** — string copies (`substr`, `append`) on every request. `string_view`-based parsing would make header reads zero-copy.
 
-The profiling flamegraph referenced in the following observations is available in [flamegraph.svg](flamegraph.svg). Please consult it for a visual breakdown of CPU usage during benchmarking of the server. Hot paths are highlighted and help correlate code structure to runtime costs.
+### `dpdk`
 
-Benchmark performed using:
+Profiled with `perf` + flamegraph (~20 frames total — no kernel I/O paths):
 
-```bash
-wrk -t4 -c100 -d30s http://18.232.66.57:8080/
+- **`rtl_recv_pkts` (56.9%)** — the RTL8169 PMD draining the NIC RX ring dominates. The NIC poll rate is the ceiling; TCP and HTTP parsing don't register.
+- **`unique_ptr` construction/destruction (~5.9%)** — the burst loop wraps each mbuf in a `unique_ptr`. DPDK's `rte_eth_rx_burst` returns up to 32 mbufs at once; processing them as a raw array and bulk-freeing after the burst would eliminate this overhead entirely.
+- **`Connection: close` on every response** — every request pays a full 3-way SYN + FIN/ACK teardown. This is the most likely cause of the 240 ms p50 latency. Keep-alive support would remove the round-trip cost.
+
+### `l2_impl`
+
+Profiled with `perf` + flamegraph:
+
+- **Socket allocation/destruction (~9.9%)** — every TCP connection heap-allocates a fresh `TCPSocket` (which holds a `std::deque`-backed queue); teardown shows up clearly. A pre-allocated socket pool would eliminate this.
+- **`unordered_map::erase` (~6.3%)** — connection-close path erases from the active connection map on every close. Combined with string allocations in `parse_request` and `build_response_string`, the HTTP layer accounts for measurable overhead despite the NIC being the real bottleneck.
+
+Each branch has its own `flamegraph.svg` with the full profile.
+
+---
+
+## Test Setup
+
+**`l4_impl`** — standard Linux TCP socket on `0.0.0.0:8080`.
+
+**`dpdk`** — NIC unbound from kernel driver and handed to DPDK via `vfio-pci`. Server hardcoded to `192.168.29.36:80`.
+
+```sh
+modprobe vfio-pci
+dpdk-devbind --bind=vfio-pci <PCI_ADDR>
 ```
 
-To see Memory Usage you can:
+**`l2_impl`** — TAP device bridged with the physical NIC. Server hardcoded to `192.168.29.12:80`.
+
+```sh
+ip link add br0 type bridge
+ip link set eth0 master br0
+ip link set tap0 master br0
+ip link set br0 up
 ```
-sudo apt install heaptrack-gui
-heaptrack_gui ./heaptrack.server.zst
-```
-
-### `accept` (~14%)
-
-High `accept()` overhead due to large amounts of short-lived TCP connection churn.
-Each connection requires:
-
-- socket allocation
-- TCP handshake management
-- fd creation
-- scheduler coordination
-
-Can be reduced by increasing keepalive timeout and reusing connections at the cost of higher memory/fd retention. 
-
-Basically shifts the cost from CPU to Memory, kind of like a design decision one has to make when one is building a server for a particular problem statement.
-
----
-
-### `epoll_ctl` (~4.23%)
-
-Mostly a skill issue / naive implementation issue.
-
-The current implementation repeatedly switches epoll interest states:
-
-```text
-accept -> read (EPOLLOUT) -> epoll_ctl -> write (EPOLLIN)
-```
-
-This creates unnecessary syscall overhead due to repeated kernel epoll metadata updates.
-
-Can be optimized by:
-
-- registering sockets once with:
-
-```cpp
-EPOLLIN | EPOLLOUT
-```
-
-- maintaining read/write state in userspace instead of kernel space. Of course more application/user level code implementations and state management.
-
----
-
-### `epoll_wait` (~26.76%)
-
-Expected behavior for event-driven architectures.
-
-Most of the time is spent:
-
-- blocked waiting for socket readiness events
-- sleeping/waking through scheduler coordination
-
-This is not active CPU spinning, but scheduler/syscall orchestration overhead.
-
----
-
-### `pump_connection` (~9.86%)
-
-Mainly caused by:
-
-- repeated string operations
-- `substr`
-- `append`
-- request parsing
-- unnecessary buffer copying
-
-Can be improved using:
-
-- pointer/offset based parsing
-- ring buffers
-- fewer allocations/copies
-- better buffer ownership models
-
-Another skill issue moment.
-
----
-
-### `unordered_map<fd, Connection>` (~18.31%)
-
-The connection table sits directly in the event-loop hot path.
-
-Although hash maps provide average `O(1)` lookups, they:
-
-- require hashing
-- involve pointer chasing
-- hurt cache locality
-
-Since file descriptors are already integer indexes, a contiguous array/vector indexed by fd would likely perform much better.
-
----
-
-### `write` (~8.45%)
-
-The overhead here was mostly:
-
-- syscall transitions
-- kernel TCP stack processing
-- userspace -> kernel buffer copying
-- packetization overhead
-
-rather than actual network bandwidth saturation.
-
-Small-request workloads tend to become syscall/TCP-stack bound rather than throughput bound.
-
----
-
-## Biggest Takeaway
-
-The majority of runtime was spent in:
-
-- scheduler activity
-- syscall handling
-- TCP stack coordination
-- memory movement
-
-rather than actual HTTP parsing or application logic, this is due to the nature of the test - being high throughput short-lived connections.
-
-
-
-This type of workload is common in high-frequency trading (HFT) systems where applications may process millions of exchange messages every second. At this scale, even small delays caused by syscalls and repeated switching between userspace and kernel space become expensive.
-
-To reduce this overhead, some trading systems use technologies like DPDK which allow applications to talk directly to the network card (NIC), bypassing much of the Linux kernel networking stack. This helps reduce latency and improves performance consistency.
-
-Frameworks like nginx usually do not use this approach because their workloads are dominated by things like:
-
-- TLS encryption
-
-- HTTP parsing
-
-- reverse proxying
-
-- load balancing
-
-- compression
-
-In these cases, the main bottleneck is often application-level processing rather than raw packet handling, so the normal Linux networking stack together with epoll is usually more than fast enough.
-
----
-
-## Quick manual test
-
-```bash
-# terminal 1
-./server
-
-# terminal 2
-curl -v http://127.0.0.1:8080/
-curl -v -d 'payload' http://127.0.0.1:8080/
-```
-
----
-
-## Summary
-
-**poor_mans_http_server** demonstrates a **Linux epoll-driven**, **non-blocking** HTTP server: one `epoll_wait` loop multiplexes the listening socket, a periodic **timerfd** for idle cleanup, and all client connections—with **EPOLLIN** while reading requests and **EPOLLOUT** while writing responses, switching interest with `**epoll_ctl`** as each connection moves through its small state machine.

@@ -46,7 +46,7 @@ All runs: `wrk -t4 -c100 -d30s`, home server, same machine.
 | `dpdk` | 230.58 | 239.96 ms | 757.81 ms | 0 |
 | `l2_impl` | 59.52 | 619.12 ms | 1.99 s | 480 |
 
-### Why `l4_impl` wins despite DPDK
+### Why `l4_impl` wins despite DPDK (Skill issue lol)
 
 Bypassing the kernel eliminates syscall overhead, but it also throws away decades of kernel TCP tuning:
 

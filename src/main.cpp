@@ -58,7 +58,7 @@ int main(){
     int tapfd = tap.fd();
     const uint8_t* x = tap.mac();
     mac_addr_t tap_mac(x);
-    ip4_addr_t ip(192, 168, 36, 12);
+    ip4_addr_t ip(192, 168, 29, 12);
     print_mac(x);
 
     ArpCache arp_cache;

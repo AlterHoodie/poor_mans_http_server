@@ -70,7 +70,10 @@ void TCPHandler::handle_syn_rcvd(uint8_t flags, uint32_t ack_num, TCPSocket &soc
 
     listen_sock.accept_queue.push(socket.event_fd);
     uint64_t val = 1;
-    write(listen_sock.event_fd, &val, 8);
+    if (write(listen_sock.event_fd, &val, sizeof(val)) !=
+        static_cast<ssize_t>(sizeof(val))) {
+        // Best-effort wake of listening eventfd.
+    }
 
     return;
 }
@@ -119,7 +122,10 @@ void TCPHandler::handle_established(
         }
 
         uint64_t val = 1;
-        write(socket.event_fd, &val, 8); 
+        if (write(socket.event_fd, &val, sizeof(val)) !=
+            static_cast<ssize_t>(sizeof(val))) {
+            // Best-effort wake of socket eventfd.
+        }
     }else if (seq_num > socket.rcv_nxt) {
         socket.recv_buf.out_of_order[seq_num] = std::vector<uint8_t>(payload, payload + payload_len);
     }
@@ -349,7 +355,9 @@ int TCPHandler::tcp_accept(int fd){
     // Listen "socket" fd is an eventfd: handle_syn_rcvd wrote +1 to wake epoll. We must read
     // it back or the counter stays nonzero and level-triggered epoll keeps returning EPOLLIN.
     uint64_t v = 0;
-    (void)read(fd, &v, sizeof(v));
+    if (read(fd, &v, sizeof(v)) != static_cast<ssize_t>(sizeof(v))) {
+        // Drain listen eventfd; ignore short read / error.
+    }
     return event_fd;
 }
 

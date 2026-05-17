@@ -23,6 +23,6 @@ src/http/parser.cpp
 if(MSVC)
   target_compile_options(stack PRIVATE /W4 /WX)
 else()
-  target_compile_options(stack PRIVATE -Wall -Wextra -Wpedantic -Werror)
+  target_compile_options(stack PRIVATE -Wall -Wextra -Wpedantic -Werror -g -O2 -fno-omit-frame-pointer)
 endif()
 target_include_directories(stack PRIVATE include)

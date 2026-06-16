@@ -85,8 +85,14 @@ size_t parse_content_length(const Request& req) {
     }
 }
 
+bool parse_keep_alive(const Request& req){
+    auto it = req.headers.find("Connection");
+    if(it != req.headers.end() && it->second=="close") return false;
+    return true;
+}
 
-std::string build_response_string(const Response &res) {
+
+std::string build_response_string(const Response &res, bool keep_alive) {
     std::string delimiter = "\r\n";
 
     std::string res_string;
@@ -100,7 +106,7 @@ std::string build_response_string(const Response &res) {
 
     // Required headers (serializer-owned)
     res_string += "Content-Length: " + std::to_string(res.body.size()) + delimiter;
-    res_string += "Connection: close" + delimiter;
+    res_string += keep_alive? "Connection: keep-alive" + delimiter: "Connection: close" + delimiter;
 
     // Custom headers
     for (const auto& [key, value] : res.headers) {

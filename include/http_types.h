@@ -85,5 +85,5 @@ struct HTTPConnection{
 
     std::string read_buf;
     std::string write_buf;
-
+    bool keep_alive {true};
 };

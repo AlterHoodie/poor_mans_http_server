@@ -4,6 +4,7 @@ project(poor_mans_http_server)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(PkgConfig REQUIRED)
 # If this fails, install libdpdk-dev (Debian/Ubuntu) or dpdk-devel (RHEL),

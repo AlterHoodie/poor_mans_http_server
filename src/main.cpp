@@ -45,11 +45,12 @@ void pump_connection(HTTPConnection &conn, Router &router){
         conn.state = HTTPState::PROCESSING;
     }
     if (conn.state == HTTPState::PROCESSING){
-        Request req = parse_request(conn.read_buf);
+        const size_t message_end = conn.body_start + conn.content_length;
+        Request req = parse_request(conn.read_buf.substr(0, message_end));
         Response res = router.route(req);
 
         conn.write_buf = build_response_string(res, conn.keep_alive);
-        conn.read_buf.clear();
+        conn.read_buf.erase(0, message_end);
         conn.state = HTTPState::WRITING;
     }
 }
@@ -116,24 +117,26 @@ int main(int argc, char *argv[]){
                 (const uint8_t* data, size_t len) {
 
                 auto& conn = conns[fd];
-                
+
                 conn.read_buf.append((const char*)data, len);
-                pump_connection(conn, router);
-                if (conn.state == HTTPState::WRITING) {
+
+                while (true) {
+                    pump_connection(conn, router);
+                    if (conn.state != HTTPState::WRITING) break;
+
                     tcp_handler.tcp_send(fd, conn.write_buf.c_str(), conn.write_buf.size());
                     conn.write_buf.clear();
-                    if(conn.keep_alive){
-                        // reset the state machine, keep the socket alive
-                        conn.state = HTTPState::READING_HEADERS;
-                        conn.content_length = 0;
-                        conn.body_start = 0;
-                        // re-pump in case the client already pipelined the next request
-                        // pump_connection(conn, router);
-                    }else{
+
+                    if (!conn.keep_alive) {
                         conn.state = HTTPState::CLOSED;
                         tcp_handler.tcp_close(fd);
                         conns.erase(fd);
+                        break;
                     }
+
+                    conn.state          = HTTPState::READING_HEADERS;
+                    conn.content_length = 0;
+                    conn.body_start     = 0;
                 }
             }
             ); 

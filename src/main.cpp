@@ -44,11 +44,12 @@ void pump_connection(HTTPConnection &conn, Router &router){
         conn.state = HTTPState::PROCESSING;
     }
     if (conn.state == HTTPState::PROCESSING){
-        Request req = parse_request(conn.read_buf);
+        const size_t message_end = conn.body_start + conn.content_length;
+        Request req = parse_request(conn.read_buf.substr(0, message_end));
         Response res = router.route(req);
 
         conn.write_buf = build_response_string(res, conn.keep_alive);
-        conn.read_buf.clear();
+        conn.read_buf.erase(0, message_end);
         conn.state = HTTPState::WRITING;
     }
 }
@@ -146,23 +147,23 @@ int main(){
                 }
                 conn.read_buf.append(buf, static_cast<size_t>(nr));
 
-                pump_connection(conn, router);
-
-                if (conn.state == HTTPState::WRITING){
+                while (true) {
+                    pump_connection(conn, router);
+                    if (conn.state != HTTPState::WRITING) break;
 
                     tcp_handler.tcp_send(fd, conn.write_buf.c_str(), conn.write_buf.size());
-
                     conn.write_buf.clear();
-                    if (conn.keep_alive){
-                        // reset the HTTP state machine, keep the socket open
-                        conn.state          = HTTPState::READING_HEADERS;
-                        conn.content_length = 0;
-                        conn.body_start     = 0;
-                    } else {
+
+                    if (!conn.keep_alive) {
                         conn.state = HTTPState::CLOSED;
                         close(fd);
                         conns.erase(fd);
+                        break;
                     }
+
+                    conn.state          = HTTPState::READING_HEADERS;
+                    conn.content_length = 0;
+                    conn.body_start     = 0;
                 }
             }
         }

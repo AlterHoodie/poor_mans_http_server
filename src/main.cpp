@@ -122,12 +122,10 @@ int main(){
                 buff->tail += bytes_read;
                 eth_handler.handle_packet(buff);
             } else if (fd == listen_fd){
-                int client_fd = tcp_handler.tcp_accept(listen_fd);
-                if (client_fd >=0){
+                int client_fd;
+                while ((client_fd = tcp_handler.tcp_accept(listen_fd)) >= 0) {
                     loop.add_event(client_fd, EPOLLIN);
-                    
-                    HTTPConnection conn{};
-                    conns[client_fd] = conn;
+                    conns[client_fd] = HTTPConnection{};
                 }
             }else if (conns.find(fd) != conns.end()) {
                 char buf[4096];

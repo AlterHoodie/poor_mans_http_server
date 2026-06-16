@@ -35,6 +35,7 @@ void pump_connection(HTTPConnection &conn, Router &router){
         Request hdr = parse_request(conn.read_buf.substr(0, conn.body_start));
         conn.content_length = parse_content_length(hdr);
         conn.state = conn.content_length > 0 ? HTTPState::READING_BODY : HTTPState::PROCESSING;
+        conn.keep_alive = parse_keep_alive(hdr);
     }
 
     if (conn.state == HTTPState::READING_BODY){
@@ -46,7 +47,7 @@ void pump_connection(HTTPConnection &conn, Router &router){
         Request req = parse_request(conn.read_buf);
         Response res = router.route(req);
 
-        conn.write_buf = build_response_string(res);
+        conn.write_buf = build_response_string(res, conn.keep_alive);
         conn.read_buf.clear();
         conn.state = HTTPState::WRITING;
     }
@@ -152,9 +153,16 @@ int main(){
                     tcp_handler.tcp_send(fd, conn.write_buf.c_str(), conn.write_buf.size());
 
                     conn.write_buf.clear();
-                    conn.state = HTTPState::CLOSED;
-                    close(fd);
-                    conns.erase(fd);
+                    if (conn.keep_alive){
+                        // reset the HTTP state machine, keep the socket open
+                        conn.state          = HTTPState::READING_HEADERS;
+                        conn.content_length = 0;
+                        conn.body_start     = 0;
+                    } else {
+                        conn.state = HTTPState::CLOSED;
+                        close(fd);
+                        conns.erase(fd);
+                    }
                 }
             }
         }

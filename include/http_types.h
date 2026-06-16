@@ -80,10 +80,11 @@ struct HTTPConnection{
     HttpMethod method;
     std::string path; 
     HTTPState state {HTTPState::READING_HEADERS};
-    uint16_t content_length;
-    size_t body_start;
+    uint16_t content_length {0};
+    size_t body_start {0};
 
     std::string read_buf;
     std::string write_buf;
 
+    bool keep_alive {true};
 };

@@ -48,6 +48,11 @@ void IPHandler::handle_packet(pkt_buff* pkt) {
     ip_csum[0] = orig_csum >> 8;
     ip_csum[1] = orig_csum & 0xFF;
 
+    uint16_t total_len = (static_cast<uint16_t>(pkt->data[2]) << 8) | pkt->data[3];
+    if (total_len < ip_header_len || total_len > pkt->len())
+        return;                              // malformed / truncated
+    pkt->tail = pkt->data + total_len;       // strip Ethernet padding
+
     uint8_t proto = pkt->data[9];
     ProtocolHandler* handler = get_handler(proto);
     if (!handler) {

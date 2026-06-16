@@ -148,8 +148,15 @@ int main(int argc, char *argv[]){
         }
     );
 
+    constexpr uint16_t BURST = BURST_SIZE;
+    pkt_buff burst[BURST];
+
     while(true){
-        auto pkt = dpdk.recv_pkt();
-        if (pkt) eth_handler.handle_packet(pkt.get());
+        uint16_t n = dpdk.recv_burst(burst, BURST);
+        for(uint16_t i = 0; i < n ;i++){
+            burst[i].ip_src[0] = burst[i].ip_dst[0] = 0;
+            eth_handler.handle_packet(&burst[i]);
+        }
+        dpdk.free_burst(burst, n);
     }
 }

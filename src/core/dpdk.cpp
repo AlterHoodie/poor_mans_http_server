@@ -117,6 +117,31 @@ pkt_buff_ptr Dpdk::recv_pkt(){
     });
 }
 
+uint16_t Dpdk::recv_burst(pkt_buff* out, uint16_t max){
+    uint16_t n = rte_eth_rx_burst(port_id_, 0, bufs_, max);
+    for (uint16_t i = 0; i < n; i++){
+        rte_mbuf* m = bufs_[i];
+        pkt_buff* pb = out + i;
+        uint8_t* base = static_cast<uint8_t*>(m->buf_addr);
+        pb->head          = base;
+        pb->data          = rte_pktmbuf_mtod(m, uint8_t*);
+        pb->tail          = pb->data + m->data_len;
+        pb->end           = base + m->buf_len;
+        pb->native_handle = m;
+    }
+
+    return n;
+}
+
+void Dpdk::free_burst(pkt_buff* pkts, uint16_t n){
+    for(uint16_t i = 0; i < n; i++ ){
+        if(pkts[i].native_handle){
+            rte_pktmbuf_free(pkts[i].native_handle);
+            pkts[i].native_handle = nullptr;
+        }
+    }
+}
+
 ssize_t Dpdk::transmit(pkt_buff* buff){
     rte_mbuf* m = buff->native_handle;
 

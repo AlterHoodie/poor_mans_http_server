@@ -20,6 +20,8 @@ public:
     const uint8_t* mac() const { return mac_.data(); }
 
     pkt_buff_ptr recv_pkt();
+    uint16_t recv_burst(pkt_buff* out, uint16_t max);
+    void free_burst(pkt_buff* pkts, uint16_t n);
     ssize_t      transmit(pkt_buff* buff);
     rte_mempool* pool() {return mbuf_pool_;};
 

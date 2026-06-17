@@ -1,3 +1,4 @@
+#include <cerrno>
 #include <iostream>
 #include <unistd.h> // for read write open files
 #include <cstring> // cpp version of string
@@ -6,12 +7,30 @@
 #include <sys/epoll.h>
 #include <sys/timerfd.h>
 #include <errno.h>
+#include <csignal>
+#include <atomic>
+#include <thread>
+#include <chrono>
 #include <unordered_map>
 
 #include "http/http_types.h"
 #include "http/parser.h"
+#include "http/request.h"
 #include "router/router.h"
 #include "net/socket.h"
+#include "tick/tick.h"
+#include "tick/tick_handler.h"
+
+static volatile sig_atomic_t g_stop = 0;
+static void handle_sigint(int) { g_stop = 1; }
+
+static void print_udp_stats(const TickStats& stats, uint64_t bad_size) {
+    std::cout << "\n--- UDP stats ---\n"
+              << "ticks=" << stats.ticks.load(std::memory_order_relaxed)
+              << "  gaps=" << stats.gaps.load(std::memory_order_relaxed)
+              << "  last_seq=" << stats.last_seq
+              << "  bad_size=" << bad_size << '\n';
+}
 
 constexpr int TIMEOUT = 10;
 
@@ -67,8 +86,7 @@ static void pump_connection(Connection& conn, Router& router, int epfd, int fd) 
     }
 }
 
-int main(){
-
+int tcp_server(){
     // Create EPoll Instance
     int epfd = epoll_create1(0);
     if (epfd == -1){
@@ -94,10 +112,8 @@ int main(){
     }
 
     add_epoll_event(epfd, EPOLLIN, tfd);
-    
 
-
-    // Create Server
+    // Create TCP Server
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     // AF_INET - user ipv4 protocol for network layer
     // SOCK_STREAM - reliable byte stream semantics
@@ -114,7 +130,7 @@ int main(){
 
     // Connection Map
     std::unordered_map<int, Connection> conns;
-    
+
 
     // Bind Socket
     sockaddr_in addr{};
@@ -146,7 +162,7 @@ int main(){
         res.status_code = StatusCode::Ok;
         res.status_text = "OK";
         res.body = "Hello World\n";
-        
+
         return res;
     };
     Handler post_handler = [](const Request& req){
@@ -157,9 +173,55 @@ int main(){
         return res;
     };
 
+    Handler slow_get_handler = [](const Request& req){
+        Response res;
+        int ms = 500;
+
+        auto pos = req.path.find("?ms");
+        if(pos != std::string::npos){
+            try{
+                ms = std::stoi(req.path.substr(pos+4));
+            }catch(...){
+                res.status_code = StatusCode::BadRequest;
+                res.body = "";
+                return res;
+            }
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(ms));
+        
+        res.status_code = StatusCode::Ok;
+        res.status_text = "OK";
+        res.body = "Sleepy";
+
+        return res;
+    };
+
+    Handler big_get_handler = [](const Request& req){
+        Response res;
+        int kb = 1024;
+
+        auto pos = req.path.find("?kb");
+        if(pos != std::string::npos){
+            try{
+                kb = std::stoi(req.path.substr(pos+4));
+            }catch(...){
+                res.status_code = StatusCode::BadRequest;
+                res.body = "";
+                return res;
+            }
+        }
+
+        res.status_code = StatusCode::Ok;
+        res.body = std::string(static_cast<size_t>(kb), 'x');
+        return res;
+    };
+
     router.add_route({HttpMethod::Get, "/"}, handler);
     router.add_route({HttpMethod::Post, "/"}, post_handler);
-    
+    router.add_route({HttpMethod::Get, "/slow"}, slow_get_handler);
+    router.add_route({HttpMethod::Get, "/big"}, big_get_handler);
+
     std::cout << "Server Listening on Port 8080... \n";
     epoll_event events[1024];
 
@@ -188,7 +250,7 @@ int main(){
 
                     auto ins = conns.emplace(client_fd, Connection{});
                     ins.first->second.fd = client_fd;
-                    
+
                 }
             } else if (fd == tfd){
                 uint64_t expirations;
@@ -250,7 +312,7 @@ int main(){
                     while (!conn.write_buf.empty()) {
                         // Writing whatever is there in write_buf of connection into the fd
                         ssize_t nw = write(fd, conn.write_buf.c_str(), conn.write_buf.size());
-                
+                    
                         if (nw > 0) {
                             conn.write_buf.erase(0, static_cast<size_t>(nw));
                         } else {
@@ -268,15 +330,15 @@ int main(){
                             //reset connection for next request
                             conn.read_buf.clear();
                             conn.write_buf.clear();
-                            
+
                             conn.state = ConnState::READING_HEADERS;
                             conn.content_length = 0;
                             conn.body_start = 0;
-                            
+
                             conn.last_active = std::chrono::steady_clock::now();
-                            
+
                             modify_epoll_event(epfd, EPOLLIN, fd);
-                            
+
                         }
                         else{
                             conn.state = ConnState::CLOSED;
@@ -288,11 +350,134 @@ int main(){
             }
         }
 
-        
+
     }
     close(server_fd);
     return 0;
+}
 
+int udp_server(bool echo){
+    std::signal(SIGINT, handle_sigint);
+
+    int epfd = epoll_create1(0);
+    if (epfd == -1){
+        perror("epoll_create1");
+        return 1;
+    }
+
+    int server_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(server_fd == -1){
+        perror("Socket Creation Failed");
+        return 1;
+    }
+    set_non_blocking(server_fd);
+    add_epoll_event(epfd, EPOLLIN, server_fd);
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(9000);
+    addr.sin_addr.s_addr = INADDR_ANY;
+
+    int opt = 1;
+    setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+
+    if (bind(server_fd, (sockaddr*)&addr, sizeof(addr)) < 0){
+        perror("Socket Bind Failed");
+        return 1;
+    }
+
+    epoll_event events[1024];
+    TickStats stats{};
+    uint64_t bad_size = 0;
+
+    std::cout << "Server listening on port 9000"
+              << (echo ? " [echo mode]" : "") << "...\n";
+
+    std::thread reporter([&stats](){
+        using clock = std::chrono::steady_clock;
+        uint64_t prev = 0;
+        auto prev_time = clock::now();
+        while (!g_stop){
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            auto now = clock::now();
+            uint64_t cur = stats.ticks.load(std::memory_order_relaxed);
+            double elapsed = std::chrono::duration<double>(now - prev_time).count();
+            double pps = (cur - prev) / elapsed;
+            std::cout << "pps=" << static_cast<uint64_t>(pps)
+                      << "  total_ticks=" << cur
+                      << "  gaps=" << stats.gaps.load(std::memory_order_relaxed)
+                      << '\n';
+            prev = cur;
+            prev_time = now;
+        }
+    });
+
+    while (!g_stop){
+        int n = epoll_wait(epfd, events, 1024, 500);
+        if (n < 0){
+            if (errno == EINTR) break;
+            perror("epoll_wait");
+            break;
+        }
+
+        for(int i = 0; i < n; i++){
+            int fd = events[i].data.fd;
+
+            if(fd == server_fd){
+                while(true){
+                    char buf[2048];
+                    sockaddr_in peer{};
+                    socklen_t peer_len = sizeof(peer);
+
+                    ssize_t nr = recvfrom(server_fd, buf, sizeof(buf), 0,
+                                         reinterpret_cast<sockaddr*>(&peer), &peer_len);
+
+                    if(nr < 0){
+                        if (errno == EAGAIN || errno == EWOULDBLOCK) break;
+                        perror("recvfrom");
+                        break;
+                    }
+
+                    if (static_cast<size_t>(nr) != sizeof(Tick)){
+                        ++bad_size;
+                        continue;
+                    }
+
+                    const Tick* tick = reinterpret_cast<const Tick*>(buf);
+                    handle_tick(*tick, stats);
+
+                    if (echo){
+                        sendto(server_fd, buf, sizeof(Tick), 0,
+                               reinterpret_cast<sockaddr*>(&peer), peer_len);
+                    }
+                }
+            }
+        }
+    }
+
+    reporter.join();
+    reporter.join();
+    print_udp_stats(stats, bad_size);
+    close(server_fd);
+    close(epfd);
+    return 0;
+}
+
+int main(int argc, char* argv[]){
+    if(argc < 2){
+        std::cerr << "usage: " << argv[0] << " <tcp|udp> [echo]\n";
+        return 1;
+    }
+    if (std::strcmp(argv[1],"tcp") == 0){
+        return tcp_server();
+    }
+    if (std::strcmp(argv[1], "udp") == 0){
+        bool echo = (argc >= 3 && std::strcmp(argv[2], "echo") == 0);
+        return udp_server(echo);
+    }
+
+    std::cerr << "Unknown mode: " << argv[1] << "\n";
+    return 1;
 }
 
 

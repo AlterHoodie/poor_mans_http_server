@@ -14,9 +14,10 @@ static Response not_found() {
 }
 
 Response Router::route(const Request& req) {
-    RouteKey key{req.method, req.path};
+    auto its = req.path.substr(0, req.path.find('?'));
+    
+    RouteKey key{req.method, its};
     auto it = routes.find(key);
-
     if (it != routes.end())
         return it->second(req);
 

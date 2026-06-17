@@ -1,3 +1,5 @@
 *.o
 *.so
 server
+build/
+compile_commands.json

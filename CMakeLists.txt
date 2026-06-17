@@ -20,6 +20,7 @@ src/link/arp.cpp
 src/net/ip.cpp
 src/net/icmp.cpp
 src/transport/tcp.cpp
+src/transport/udp.cpp
 src/main.cpp
 src/router/router.cpp
 src/http/parser.cpp
@@ -32,3 +33,4 @@ else()
 endif()
 target_include_directories(stack PRIVATE include)
 target_link_libraries(stack PRIVATE PkgConfig::LIBDPDK)
+set_target_properties(stack PROPERTIES OUTPUT_NAME server)

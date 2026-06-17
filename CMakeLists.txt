@@ -15,6 +15,7 @@ src/link/arp.cpp
 src/net/ip.cpp
 src/net/icmp.cpp
 src/transport/tcp.cpp
+src/transport/udp.cpp
 src/main.cpp
 src/router/router.cpp
 src/http/parser.cpp
@@ -26,3 +27,4 @@ else()
   target_compile_options(stack PRIVATE -Wall -Wextra -Wpedantic -Werror -g -O2 -fno-omit-frame-pointer)
 endif()
 target_include_directories(stack PRIVATE include)
+set_target_properties(stack PROPERTIES OUTPUT_NAME server)

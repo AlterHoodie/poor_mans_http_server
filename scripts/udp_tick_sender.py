@@ -12,7 +12,10 @@ Modes
 -----
 Default (load):
     Sends --count ticks fire-and-forget.
-    Use --threads N to send from N parallel sender threads simultaneously.
+    Prefer --procs N (separate processes) over --threads for max pps.
+    Use --threads 1 for meaningful server "gaps" stats (in-order seq).
+    With --procs > 1, ignore gaps (interleaved seq ranges); compare
+    server total_ticks vs packets sent for real loss.
     Ctrl+C the server to see stats.
 
 Latency (--latency):
@@ -24,6 +27,7 @@ Latency (--latency):
 
 import argparse
 import asyncio
+import multiprocessing as mp
 import socket
 import statistics
 import struct
@@ -47,6 +51,14 @@ class LoadResult:
     elapsed: float = 0.0
 
 
+def _tune_udp_socket(sock: socket.socket) -> None:
+    """Larger kernel TX buffer — reduces sendto blocking under load."""
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 4 * 1024 * 1024)
+    except OSError:
+        pass
+
+
 def _load_worker(
     host: str,
     port: int,
@@ -56,9 +68,10 @@ def _load_worker(
     base_price: int,
     qty: int,
     rate: float,           # ticks/sec for this worker (0 = unlimited)
-    result: LoadResult,
-) -> None:
+    result: LoadResult | None = None,
+) -> LoadResult:
     sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    _tune_udp_socket(sock)
     addr = (host, port)
     interval = 1.0 / rate if rate > 0 else 0.0
     t0 = time.time_ns()
@@ -76,56 +89,79 @@ def _load_worker(
         if interval:
             time.sleep(interval)
 
-    result.elapsed = (time.time_ns() - t0) / 1e9
-    result.sent    = count
+    out = LoadResult(
+        sent=count,
+        elapsed=(time.time_ns() - t0) / 1e9,
+    )
     sock.close()
+    if result is not None:
+        result.sent = out.sent
+        result.elapsed = out.elapsed
+    return out
+
+
+def _load_worker_mp(job: tuple) -> LoadResult:
+    return _load_worker(*job)
 
 
 def run_load(args: argparse.Namespace) -> None:
-    n_threads  = max(1, args.threads)
-    total      = args.count
-    per_thread = total // n_threads
-    remainder  = total % n_threads
-    # Per-thread rate so the aggregate rate stays at args.rate.
-    thread_rate = args.rate / n_threads if args.rate > 0 else 0.0
-
-    results: list[LoadResult] = [LoadResult() for _ in range(n_threads)]
-    threads: list[threading.Thread] = []
+    n_workers = max(1, args.procs if args.procs > 0 else args.threads)
+    use_procs = args.procs > 0
+    total = args.count
+    per_worker = total // n_workers
+    remainder = total % n_workers
+    worker_rate = args.rate / n_workers if args.rate > 0 else 0.0
 
     global_start = time.time_ns()
-
     seq_offset = 1
-    for idx in range(n_threads):
-        count = per_thread + (1 if idx < remainder else 0)
-        t = threading.Thread(
-            target=_load_worker,
-            args=(
-                args.host, args.port,
-                seq_offset, count,
-                args.symbol, args.price, args.qty,
-                thread_rate,
-                results[idx],
-            ),
-            daemon=True,
-        )
+    jobs: list[tuple] = []
+
+    for idx in range(n_workers):
+        count = per_worker + (1 if idx < remainder else 0)
+        jobs.append((
+            args.host, args.port,
+            seq_offset, count,
+            args.symbol, args.price, args.qty,
+            worker_rate,
+            None,
+        ))
         seq_offset += count
-        threads.append(t)
 
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    if use_procs and n_workers > 1:
+        with mp.Pool(n_workers) as pool:
+            results = pool.map(_load_worker_mp, jobs, chunksize=1)
+    elif use_procs:
+        results = [_load_worker(*jobs[0])]
+    else:
+        results = [LoadResult() for _ in range(n_workers)]
+        threads: list[threading.Thread] = []
+        for idx, job in enumerate(jobs):
+            t = threading.Thread(
+                target=_load_worker,
+                args=(*job[:-1], results[idx]),
+                daemon=True,
+            )
+            threads.append(t)
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
 
-    total_sent   = sum(r.sent for r in results)
+    total_sent = sum(r.sent for r in results)
     wall_elapsed = (time.time_ns() - global_start) / 1e9
-    rate_actual  = total_sent / wall_elapsed if wall_elapsed > 0 else 0.0
+    rate_actual = total_sent / wall_elapsed if wall_elapsed > 0 else 0.0
+    kind = "process(es)" if use_procs else "thread(s)"
 
     print(
         f"sent {total_sent} ticks ({TICK_SIZE} bytes each) "
         f"to {args.host}:{args.port} "
         f"in {wall_elapsed:.3f}s ({rate_actual:.0f} ticks/s) "
-        f"across {n_threads} thread(s)"
+        f"across {n_workers} {kind}"
     )
+    if n_workers > 1:
+        print("ignore server gaps (interleaved seq); compare total_ticks vs sent.")
+    else:
+        print("server gaps meaningful with a single in-order stream.")
     print("Ctrl+C the server to see ticks/gaps stats.")
 
 
@@ -325,8 +361,12 @@ def main() -> None:
         help="latency mode: send ticks and measure RTT (requires server udp echo)",
     )
     parser.add_argument(
+        "--procs", type=int, default=0, metavar="N",
+        help="(load mode) parallel sender processes (recommended for max pps)",
+    )
+    parser.add_argument(
         "--threads", type=int, default=1, metavar="N",
-        help="(load mode) number of parallel sender threads (default: 1)",
+        help="(load mode) parallel sender threads if --procs is 0 (default: 1)",
     )
     parser.add_argument(
         "--inflight", type=int, default=1, metavar="N",

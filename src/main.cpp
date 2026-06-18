@@ -79,6 +79,9 @@ static void pump_connection(Connection& conn, Router& router, int epfd, int fd) 
         Request req = parse_request(
             conn.read_buf.substr(0, conn.body_start + conn.content_length));
         Response res = router.route(req);
+
+        if (conn.keep_alive) 
+            res.headers["Connection"] = "keep-alive";
         conn.write_buf = build_response_string(res);
         conn.read_buf.clear();
         conn.state = ConnState::WRITING;

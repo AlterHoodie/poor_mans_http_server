@@ -88,7 +88,9 @@ std::string build_response_string(const Response &res) {
 
     // Required headers (serializer-owned)
     res_string += "Content-Length: " + std::to_string(res.body.size()) + delimiter;
-    res_string += "Connection: close" + delimiter;
+    auto conn_it = res.headers.find("Connection");
+    std::string conn_val = (conn_it != res.headers.end()) ? conn_it->second : "close";
+    res_string += "Connection: " + conn_val + delimiter;
 
     // Custom headers
     for (const auto& [key, value] : res.headers) {

@@ -8,10 +8,10 @@
 #define NUM_MBUFS 8191
 #define MBUF_CACHE_SIZE 250
 
-#define BURST_SIZE 32
+#define BURST_SIZE 64
 
-#define RX_RING_SIZE 1024
-#define TX_RING_SIZE 1024
+#define RX_RING_SIZE 2048
+#define TX_RING_SIZE 2048
 
 class Dpdk {
 public:

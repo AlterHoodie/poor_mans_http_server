@@ -76,14 +76,13 @@ static void pump_connection(Connection& conn, Router& router, int epfd, int fd) 
     }
 
     if (conn.state == ConnState::PROCESSING) {
-        Request req = parse_request(
-            conn.read_buf.substr(0, conn.body_start + conn.content_length));
+        conn.consumed = conn.body_start + conn.content_length;
+        Request req = parse_request(conn.read_buf.substr(0, conn.consumed));
         Response res = router.route(req);
 
-        if (conn.keep_alive) 
+        if (conn.keep_alive)
             res.headers["Connection"] = "keep-alive";
         conn.write_buf = build_response_string(res);
-        conn.read_buf.clear();
         conn.state = ConnState::WRITING;
         modify_epoll_event(epfd, EPOLLOUT, fd);
     }
@@ -307,10 +306,12 @@ int tcp_server(){
                     }
                     auto it = conns.find(fd);
                     if (it == conns.end()) continue;
-                    pump_connection(conn, router, epfd, fd);
+                    pump_connection(it->second, router, epfd, fd);
                 }
                 if(events[i].events & EPOLLOUT){
-                    auto& conn = conns[fd];
+                    auto it2 = conns.find(fd);
+                    if (it2 == conns.end()) continue;
+                    auto& conn = it2->second;
 
                     while (!conn.write_buf.empty()) {
                         // Writing whatever is there in write_buf of connection into the fd
@@ -330,18 +331,24 @@ int tcp_server(){
                     // Response Data has been written into the socket
                     if (conn.write_buf.empty()) {
                         if (conn.keep_alive){
-                            //reset connection for next request
-                            conn.read_buf.clear();
+                            // remove only the bytes belonging to the completed request
+                            // any pipelined request data already read stays in read_buf
+                            conn.read_buf.erase(0, conn.consumed);
                             conn.write_buf.clear();
 
                             conn.state = ConnState::READING_HEADERS;
                             conn.content_length = 0;
                             conn.body_start = 0;
+                            conn.consumed = 0;
 
                             conn.last_active = std::chrono::steady_clock::now();
 
                             modify_epoll_event(epfd, EPOLLIN, fd);
 
+                            // if pipelined data is already buffered, process it now
+                            // without waiting for another epoll event
+                            if (!conn.read_buf.empty())
+                                pump_connection(conn, router, epfd, fd);
                         }
                         else{
                             conn.state = ConnState::CLOSED;
@@ -458,7 +465,6 @@ int udp_server(bool echo){
         }
     }
 
-    reporter.join();
     reporter.join();
     print_udp_stats(stats, bad_size);
     close(server_fd);

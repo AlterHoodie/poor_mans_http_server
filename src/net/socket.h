@@ -32,5 +32,6 @@ struct Connection {
     size_t body_start = 0; // where body begins in read_buf
 
     bool keep_alive = true;
+    size_t consumed = 0; // bytes of read_buf consumed by the current request
     std::chrono::steady_clock::time_point last_active = std::chrono::steady_clock::now();
 };

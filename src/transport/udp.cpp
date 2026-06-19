@@ -93,7 +93,7 @@ void UDPHandler::handle_packet(pkt_buff* pkt) {
     if (payload_len == sizeof(Tick)) {
         Tick tick;
         std::memcpy(&tick, payload, sizeof(Tick));
-        handle_tick(tick, stats);
+        handle_tick(tick, stats, work_iters_);
     } else {
         ++bad_size;
     }
@@ -133,4 +133,8 @@ void UDPHandler::udp_bind(uint16_t port) {
 
 void UDPHandler::set_echo(bool echo) {
     echo_ = echo;
+}
+
+void UDPHandler::set_work_iters(int work_iters) {
+    work_iters_ = work_iters > 0 ? work_iters : 0;
 }

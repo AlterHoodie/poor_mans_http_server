@@ -176,7 +176,7 @@ static int run_http_server() {
     }
 }
 
-static int run_udp_server(bool echo) {
+static int run_udp_server(bool echo, int work_iters) {
     std::signal(SIGINT, handle_sigint);
 
     EventLoop loop = EventLoop();
@@ -202,11 +202,14 @@ static int run_udp_server(bool echo) {
 
     udp_handler.udp_bind(9000);
     udp_handler.set_echo(echo);
+    udp_handler.set_work_iters(work_iters);
 
     loop.add_event(tapfd, EPOLLIN);
 
     std::cout << "UDP server listening on port 9000"
-              << (echo ? " [echo mode]" : "") << "\n";
+              << (echo ? " [echo mode]" : "")
+              << (work_iters > 0 ? " [work-iters=" + std::to_string(work_iters) + "]" : "")
+              << "\n";
 
     std::thread reporter([&udp_handler]() {
         using clock = std::chrono::steady_clock;
@@ -259,15 +262,23 @@ static int run_udp_server(bool echo) {
 
 int main(int argc, char* argv[]) {
     if (argc < 2) {
-        std::cerr << "usage: " << argv[0] << " <tcp|udp> [echo]\n";
+        std::cerr << "usage: " << argv[0] << " <tcp|udp> [echo] [work-iters]\n";
         return 1;
     }
     if (std::strcmp(argv[1], "tcp") == 0) {
         return run_http_server();
     }
     if (std::strcmp(argv[1], "udp") == 0) {
-        bool echo = (argc >= 3 && std::strcmp(argv[2], "echo") == 0);
-        return run_udp_server(echo);
+        bool echo = false;
+        int work_iters = 0;
+        for (int i = 2; i < argc; ++i) {
+            if (std::strcmp(argv[i], "echo") == 0) {
+                echo = true;
+            } else {
+                work_iters = std::atoi(argv[i]);
+            }
+        }
+        return run_udp_server(echo, work_iters);
     }
     std::cerr << "unknown mode: " << argv[1] << "\n";
     return 1;

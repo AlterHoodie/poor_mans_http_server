@@ -156,7 +156,7 @@ static int run_http_server(Dpdk& dpdk) {
 
 // ── UDP echo server ──────────────────────────────────────────────────────────
 
-static int run_udp_server(Dpdk& dpdk, bool echo) {
+static int run_udp_server(Dpdk& dpdk, bool echo, int work_iters) {
     std::signal(SIGINT, handle_sigint);
 
     const uint8_t* x = dpdk.mac();
@@ -181,9 +181,12 @@ static int run_udp_server(Dpdk& dpdk, bool echo) {
 
     udp_handler.udp_bind(9000);
     udp_handler.set_echo(echo);
+    udp_handler.set_work_iters(work_iters);
 
     std::cout << "UDP server listening on port 9000"
-              << (echo ? " [echo mode]" : "") << "\n";
+              << (echo ? " [echo mode]" : "")
+              << (work_iters > 0 ? " [work-iters=" + std::to_string(work_iters) + "]" : "")
+              << "\n";
 
     std::thread reporter([&udp_handler]() {
         using clock = std::chrono::steady_clock;
@@ -243,7 +246,7 @@ int main(int argc, char* argv[]) {
     char** app_argv = argv + retval;
 
     if (app_argc < 2) {
-        std::cerr << "usage: " << app_argv[0] << " <tcp|udp> [echo]\n";
+        std::cerr << "usage: " << app_argv[0] << " <tcp|udp> [echo] [work-iters]\n";
         return 1;
     }
 
@@ -253,8 +256,16 @@ int main(int argc, char* argv[]) {
         return run_http_server(dpdk);
     }
     if (std::strcmp(app_argv[1], "udp") == 0) {
-        bool echo = (app_argc >= 3 && std::strcmp(app_argv[2], "echo") == 0);
-        return run_udp_server(dpdk, echo);
+        bool echo = false;
+        int work_iters = 0;
+        for (int i = 2; i < app_argc; ++i) {
+            if (std::strcmp(app_argv[i], "echo") == 0) {
+                echo = true;
+            } else {
+                work_iters = std::atoi(app_argv[i]);
+            }
+        }
+        return run_udp_server(dpdk, echo, work_iters);
     }
 
     std::cerr << "unknown mode: " << app_argv[1] << "\n";

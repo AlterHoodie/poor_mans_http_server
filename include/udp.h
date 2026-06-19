@@ -14,6 +14,7 @@ private:
     IPHandler&                   ip_;
     std::unordered_set<uint16_t> bind_table_;
     bool                         echo_{false};
+    int                          work_iters_{0};
 
 public:
     TickStats stats{};
@@ -27,4 +28,5 @@ public:
 
     void udp_bind(uint16_t port);
     void set_echo(bool echo);
+    void set_work_iters(int work_iters);
 };

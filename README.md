@@ -6,13 +6,12 @@ A learning exercise exploring how an HTTP server behaves at different layers of 
 
 ## Branch Index
 
-| Branch | I/O mechanism | Stack starts at | Req/sec (c100) | Req/sec (pipelined) |
-|---|---|---|---|---|
-| [`l4_impl`](../../tree/l4_impl) | Linux `epoll` + kernel TCP sockets | Layer 4 — kernel owns TCP/IP | **14,631** | 29,252 ¹ |
-| [`dpdk`](../../tree/dpdk) | DPDK `rte_eth_rx_burst` — no syscalls | Layer 2 — custom ARP/IP/TCP | 15,399 | **50,753** |
-| [`l2_impl`](../../tree/l2_impl) | Linux TAP device (`tap0`) | Layer 2 — custom ARP/IP/TCP | 14,440 | 39,417 |
 
-¹ All non-2xx — `l4_impl` does not support HTTP pipelining; wrk's pipeline script sends batched requests but each is handled as a new connection.
+| Branch                          | I/O mechanism                         | Stack starts at              | Req/sec (c200) | Req/sec (pipelined) |
+| ------------------------------- | ------------------------------------- | ---------------------------- | -------------- | ------------------- |
+| `[l4_impl](../../tree/l4_impl)` | Linux `epoll` + kernel TCP sockets    | Layer 4 — kernel owns TCP/IP | **14,631**     | —                   |
+| `[dpdk](../../tree/dpdk)`       | DPDK `rte_eth_rx_burst` - no syscalls | Layer 2 — custom ARP/IP/TCP  | 12,540         | **50,753**          |
+| `[l2_impl](../../tree/l2_impl)` | Linux TAP device (`tap0`)             | Layer 2 — custom ARP/IP/TCP  | 12,140         | 39,417              |
 
 `main` is this index only. All source code lives on the branches above.
 
@@ -48,24 +47,27 @@ Earlier runs saturated the NIC RX ring faster than the CPU could drain it, so th
 
 `wrk -t8 -c200 -d30s` and `wrk -t8 -c1000 -d30s`, `l4_impl` at `-t4 -c100` (different port/run):
 
-| Branch | Connections | Req/sec | Avg latency | Max latency | Timeouts |
-|---|---|---|---|---|---|
-| `l4_impl` | 200 | **14,631** | 94.94 ms | 4.12 s | 0 |
-| `l4_impl` | 1000 | 5,209 | 230.90 ms | 9.45 s | 17 |
-| `dpdk` | 200 | 12,540 | 10.16 ms | 1.09 s | 23 |
-| `dpdk` | 1000 | 15,399 | 9.25 ms | 2.06 s | 72 |
-| `l2_impl` | 200 | 12,140 | 14.39 ms | 1.56 s | 46 |
-| `l2_impl` | 1000 | 14,440 | 16.66 ms | 2.09 s | 81 |
+
+| Branch    | Connections | Req/sec    | Avg latency | Max latency | Timeouts |
+| --------- | ----------- | ---------- | ----------- | ----------- | -------- |
+| `l4_impl` | 200         | **14,631** | 94.94 ms    | 4.12 s      | 0        |
+| `l4_impl` | 1000        | 5,209      | 230.90 ms   | 9.45 s      | 17       |
+| `dpdk`    | 200         | 12,540     | 10.16 ms    | 1.09 s      | 23       |
+| `dpdk`    | 1000        | **15,399** | 9.25 ms     | 2.06 s      | 72       |
+| `l2_impl` | 200         | 12,140     | 14.39 ms    | 1.56 s      | 46       |
+| `l2_impl` | 1000        | 14,440     | 16.66 ms    | 2.09 s      | 81       |
+
 
 ### Pipelined (`pipeline.lua`, `wrk -t4 -c100 -d30s`)
 
-| Branch | Req/sec | p50 latency | p99 latency | Timeouts | Note |
-|---|---|---|---|---|---|
-| `l4_impl` | 29,252 | — | — | 100 | All non-2xx; no pipeline support |
-| `dpdk` | **50,753** | 15.67 ms | — | 64 | |
-| `l2_impl` | 39,417 | 7.97 ms | 645.87 ms | 14 | |
 
-### Why `l4_impl` wins on standard requests (Skill issue lol)
+| Branch    | Req/sec    | p50 latency | p99 latency | Timeouts |
+| --------- | ---------- | ----------- | ----------- | -------- |
+| `dpdk`    | **50,753** | 15.67 ms    | —           | 64       |
+| `l2_impl` | 39,417     | 7.97 ms     | 645.87 ms   | 14       |
+
+
+### Why `l4_impl` wins on standard requests
 
 Bypassing the kernel eliminates syscall overhead, but it also throws away decades of kernel TCP tuning:
 
@@ -77,7 +79,7 @@ For a workload that is TCP-handshake-heavy (short-lived connections, small paylo
 
 ### Why DPDK wins on pipelined requests
 
-With pipelining, connection-setup overhead is amortised across many requests per connection. This removes `l4_impl`'s main advantage (mature kernel connection handling) while exposing DPDK's actual strength: zero-copy, zero-syscall packet I/O. At 50,753 req/s DPDK is ~1.3× faster than `l2_impl` in the pipelined case — consistent with DPDK eliminating the double kernel-boundary crossing that `l2_impl` (TAP device) still pays.
+With pipelining, connection-setup overhead is amortised across many requests per connection. This exposes DPDK's actual strength: zero-copy, zero-syscall packet I/O. At 50,753 req/s DPDK is ~1.3× faster than `l2_impl` — consistent with DPDK eliminating the double kernel-boundary crossing that `l2_impl` (TAP device) still pays. `l4_impl` is excluded from this comparison as it does not support HTTP pipelining.
 
 ### Why `l2_impl` is slowest on standard requests
 
@@ -91,25 +93,25 @@ Every packet crosses the kernel boundary **twice** before reaching userspace: NI
 
 Profiled with `perf` + flamegraph. Hottest paths:
 
-- **`epoll_wait` (~26.8%)** — expected for event-driven I/O; the process spends most time blocked waiting for readiness.
-- **`accept` (~14%)** — short-lived connection churn forces a full TCP handshake + fd allocation per request. Keep-alive would shift this cost to memory.
-- **`unordered_map` (~18.3%)** — the connection table is in the hot path. File descriptors are already integers; a flat array indexed by fd would eliminate hashing and pointer chasing.
-- **`pump_connection` (~9.9%)** — string copies (`substr`, `append`) on every request. `string_view`-based parsing would make header reads zero-copy.
+- `**epoll_wait` (~26.8%)** — expected for event-driven I/O; the process spends most time blocked waiting for readiness.
+- `**accept` (~14%)** — short-lived connection churn forces a full TCP handshake + fd allocation per request. Keep-alive would shift this cost to memory.
+- `**unordered_map` (~18.3%)** — the connection table is in the hot path. File descriptors are already integers; a flat array indexed by fd would eliminate hashing and pointer chasing.
+- `**pump_connection` (~9.9%)** — string copies (`substr`, `append`) on every request. `string_view`-based parsing would make header reads zero-copy.
 
 ### `dpdk`
 
 Profiled with `perf` + flamegraph (~20 frames total — no kernel I/O paths):
 
-- **`rtl_recv_pkts` (56.9%)** — the RTL8169 PMD draining the NIC RX ring dominated in earlier runs where the NIC was the bottleneck. With the added CPU load the processing cost is now more evenly distributed.
-- **`unique_ptr` construction/destruction (~5.9%)** — the burst loop wraps each mbuf in a `unique_ptr`. DPDK's `rte_eth_rx_burst` returns up to 32 mbufs at once; processing them as a raw array and bulk-freeing after the burst would eliminate this overhead entirely.
-- **`Connection: close` on every response** — every request pays a full 3-way SYN + FIN/ACK teardown. Keep-alive support would remove the round-trip cost and is why DPDK's advantage shows most clearly in the pipelined benchmark (50,753 req/s vs 15,399 without pipelining).
+- `**rtl_recv_pkts` (56.9%)** — the RTL8169 PMD draining the NIC RX ring dominated in earlier runs where the NIC was the bottleneck. With the added CPU load the processing cost is now more evenly distributed.
+- `**unique_ptr` construction/destruction (~5.9%)** — the burst loop wraps each mbuf in a `unique_ptr`. DPDK's `rte_eth_rx_burst` returns up to 32 mbufs at once; processing them as a raw array and bulk-freeing after the burst would eliminate this overhead entirely.
+- `**Connection: close` on every response** — every request pays a full 3-way SYN + FIN/ACK teardown. Keep-alive support would remove the round-trip cost and is why DPDK's advantage shows most clearly in the pipelined benchmark (50,753 req/s vs 15,399 without pipelining).
 
 ### `l2_impl`
 
 Profiled with `perf` + flamegraph:
 
 - **Socket allocation/destruction (~9.9%)** — every TCP connection heap-allocates a fresh `TCPSocket` (which holds a `std::deque`-backed queue); teardown shows up clearly. A pre-allocated socket pool would eliminate this.
-- **`unordered_map::erase` (~6.3%)** — connection-close path erases from the active connection map on every close. Combined with string allocations in `parse_request` and `build_response_string`, the HTTP layer accounts for measurable overhead despite the NIC being the real bottleneck.
+- `**unordered_map::erase` (~6.3%)** — connection-close path erases from the active connection map on every close. Combined with string allocations in `parse_request` and `build_response_string`, the HTTP layer accounts for measurable overhead despite the NIC being the real bottleneck.
 
 Each branch has its own `flamegraph.svg` with the full profile.
 
@@ -117,16 +119,16 @@ Each branch has its own `flamegraph.svg` with the full profile.
 
 ## Test Setup
 
-**`l4_impl`** — standard Linux TCP socket on `0.0.0.0:8080`.
+`**l4_impl`** — standard Linux TCP socket on `0.0.0.0:8080`.
 
-**`dpdk`** — NIC unbound from kernel driver and handed to DPDK via `vfio-pci`. Server hardcoded to `192.168.29.36:80`.
+`**dpdk`** — NIC unbound from kernel driver and handed to DPDK via `vfio-pci`. Server hardcoded to `192.168.29.36:80`.
 
 ```sh
 modprobe vfio-pci
 dpdk-devbind --bind=vfio-pci <PCI_ADDR>
 ```
 
-**`l2_impl`** — TAP device bridged with the physical NIC. Server hardcoded to `192.168.29.12:80`.
+`**l2_impl**` — TAP device bridged with the physical NIC. Server hardcoded to `192.168.29.12:80`.
 
 ```sh
 ip link add br0 type bridge
@@ -134,3 +136,4 @@ ip link set eth0 master br0
 ip link set tap0 master br0
 ip link set br0 up
 ```
+

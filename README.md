@@ -31,20 +31,49 @@ ip link set br0 up
 
 ## Benchmark
 
+> **Note:** A CPU-intensive operation was added per request so the benchmark exercises per-request processing cost rather than just busy-wait NIC polling (the NIC fills the RX ring slower than the CPU can drain it on this hardware).
+
+### Standard
+
 ```
-wrk -t4 -c100 -d30s http://192.168.29.12:80/hi
+wrk -t8 -c200 -d30s http://192.168.29.12/hi --timeout 10s
+Running 30s test @ http://192.168.29.12/hi
+  8 threads and 200 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    14.39ms   92.36ms   1.56s    98.01%
+    Req/Sec     1.73k     1.39k    5.27k    54.69%
+  351870 requests in 28.98s, 22.82MB read
+  Socket errors: connect 0, read 0, write 0, timeout 46
+Requests/sec:  12139.76
+
+wrk -t8 -c1000 -d30s http://192.168.29.12/hi --timeout 10s
+Running 30s test @ http://192.168.29.12/hi
+  8 threads and 1000 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    16.66ms  115.28ms   2.09s    98.61%
+    Req/Sec     2.18k     2.19k    9.39k    75.77%
+  418214 requests in 28.96s, 27.12MB read
+  Socket errors: connect 0, read 0, write 0, timeout 81
+Requests/sec:  14439.90
 ```
 
-Below were the throuput metrics:
+### Pipelined
+
 ```
-Running 30s test @ http://192.168.29.12:80/hi
+wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.12/hi
+Running 30s test @ http://192.168.29.12/hi
   4 threads and 100 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   619.12ms  484.15ms   1.99s    83.74%
-    Req/Sec    38.35     34.10   180.00     76.56%
-  1790 requests in 30.07s, 110.13KB read
-  Socket errors: connect 0, read 0, write 0, timeout 480
-Requests/sec: 59.52
+    Latency    25.77ms   98.87ms 990.90ms   96.43%
+    Req/Sec    13.06k     8.46k   35.71k    46.16%
+  Latency Distribution
+     50%    7.97ms
+     75%   11.31ms
+     90%   15.51ms
+     99%  645.87ms
+  1141206 requests in 28.95s, 74.01MB read
+  Socket errors: connect 0, read 0, write 0, timeout 14
+Requests/sec:  39416.58
 ```
 
 

@@ -72,8 +72,40 @@ The profiling flamegraph referenced in the following observations is available i
 Benchmark performed using:
 
 ```bash
-wrk -t4 -c100 -d30s http://18.232.66.57:8080/
+# standard
+wrk -t4 -c100 -d30s --latency http://192.168.29.36:8080/
+
+# pipelined
+wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.36:8080/
 ```
+
+Results:
+
+```
+# standard
+Running 30s test @ http://192.168.29.36:8080/
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    19.83ms   97.88ms   1.95s    96.00%
+    Req/Sec     5.42k     1.37k    7.77k    83.07%
+  Latency Distribution
+     50%    4.19ms
+     75%    5.34ms
+     90%    9.26ms
+     99%  344.60ms
+  640283 requests in 29.17s, 45.80MB read
+  Socket errors: connect 0, read 0, write 0, timeout 52
+Requests/sec:  21948.44
+
+# pipelined (all non-2xx — pipeline not supported; each batched request is treated as a new connection)
+Running 30s test @ http://192.168.29.36:8080/
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    20.06ms   46.89ms   1.29s    20.83%
+    Req/Sec     7.12k     1.49k    9.33k    88.88%
+  Non-2xx or 3xx responses: 852704
+Requests/sec:  29252.78
+```
+
+> **Note:** A CPU-intensive operation was added per request so the benchmark exercises per-request processing cost rather than just busy-wait NIC polling (the NIC fills the RX ring slower than the CPU can drain it on this hardware).
 
 To see Memory Usage you can:
 ```

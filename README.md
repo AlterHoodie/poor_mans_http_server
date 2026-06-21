@@ -56,17 +56,48 @@ Server IP is hardcoded to `192.168.29.36:80`.
 
 ## Benchmark
 
-```
-wrk -t4 -c100 -d30s http://192.168.29.36:80/hi
-```
+> **Note:** A CPU-intensive operation was added per request so the benchmark exercises per-request processing cost rather than just busy-wait NIC polling (the NIC fills the RX ring slower than the CPU can drain it on this hardware).
 
-These were the throughput results:
+### Standard
 
 ```
-  Latency   239.96ms   51.75ms 757.81ms   97.24%
-  Req/Sec    59.35     38.12   222.00     65.15%
-  6935 requests in 30.08s, 426.67KB read
-Requests/sec: 230.58
+wrk -t8 -c200 -d30s http://192.168.29.36/hi --timeout 10s
+Running 30s test @ http://192.168.29.36/hi
+  8 threads and 200 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    10.16ms   63.84ms   1.09s    98.18%
+    Req/Sec     1.75k     1.58k    6.05k    75.60%
+  362442 requests in 28.90s, 23.50MB read
+  Socket errors: connect 0, read 0, write 0, timeout 23
+Requests/sec:  12540.03
+
+wrk -t8 -c1000 -d30s http://192.168.29.36/hi --timeout 10s
+Running 30s test @ http://192.168.29.36/hi
+  8 threads and 1000 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency     9.25ms   64.28ms   2.06s    99.14%
+    Req/Sec     2.24k     1.16k    6.97k    67.33%
+  440900 requests in 28.63s, 28.59MB read
+  Socket errors: connect 0, read 0, write 0, timeout 72
+Requests/sec:  15398.94
+```
+
+### Pipelined
+
+```
+wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.36/hi
+Running 30s test @ http://192.168.29.36/hi
+  4 threads and 100 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency    47.89ms  188.60ms   2.00s    94.95%
+    Req/Sec    12.45k     5.67k   29.44k    54.07%
+  Latency Distribution
+     50%   15.67ms
+     75%   23.73ms
+     90%   33.45ms
+  1468342 requests in 28.93s, 95.22MB read
+  Socket errors: connect 0, read 0, write 0, timeout 64
+Requests/sec:  50753.32
 ```
 
 ## Flamegraph

@@ -51,6 +51,7 @@ Earlier runs saturated the NIC RX ring faster than the CPU could drain it, so th
 | Branch | Connections | Req/sec | Avg latency | Max latency | Timeouts |
 |---|---|---|---|---|---|
 | `l4_impl` | 200 | **14,631** | 94.94 ms | 4.12 s | 0 |
+| `l4_impl` | 1000 | 5,209 | 230.90 ms | 9.45 s | 17 |
 | `dpdk` | 200 | 12,540 | 10.16 ms | 1.09 s | 23 |
 | `dpdk` | 1000 | 15,399 | 9.25 ms | 2.06 s | 72 |
 | `l2_impl` | 200 | 12,140 | 14.39 ms | 1.56 s | 46 |

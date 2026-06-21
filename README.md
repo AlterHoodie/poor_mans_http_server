@@ -73,7 +73,7 @@ Benchmark performed using:
 
 ```bash
 # standard
-wrk -t4 -c100 -d30s --latency http://192.168.29.36:8080/
+wrk -t8 -c200 -d30s http://192.168.29.36:8080/ --timeout 10s
 
 # pipelined
 wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.36:8080/
@@ -84,17 +84,12 @@ Results:
 ```
 # standard
 Running 30s test @ http://192.168.29.36:8080/
+  8 threads and 200 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    19.83ms   97.88ms   1.95s    96.00%
-    Req/Sec     5.42k     1.37k    7.77k    83.07%
-  Latency Distribution
-     50%    4.19ms
-     75%    5.34ms
-     90%    9.26ms
-     99%  344.60ms
-  640283 requests in 29.17s, 45.80MB read
-  Socket errors: connect 0, read 0, write 0, timeout 52
-Requests/sec:  21948.44
+    Latency    94.94ms  262.30ms   4.12s    93.70%
+    Req/Sec     1.87k     0.87k    3.67k    62.96%
+  439876 requests in 30.06s, 31.46MB read
+Requests/sec:  14630.90
 
 # pipelined (all non-2xx — pipeline not supported; each batched request is treated as a new connection)
 Running 30s test @ http://192.168.29.36:8080/

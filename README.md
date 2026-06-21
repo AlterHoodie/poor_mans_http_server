@@ -8,7 +8,7 @@ A learning exercise exploring how an HTTP server behaves at different layers of 
 
 | Branch | I/O mechanism | Stack starts at | Req/sec (c100) | Req/sec (pipelined) |
 |---|---|---|---|---|
-| [`l4_impl`](../../tree/l4_impl) | Linux `epoll` + kernel TCP sockets | Layer 4 — kernel owns TCP/IP | **21,948** | 29,252 ¹ |
+| [`l4_impl`](../../tree/l4_impl) | Linux `epoll` + kernel TCP sockets | Layer 4 — kernel owns TCP/IP | **14,631** | 29,252 ¹ |
 | [`dpdk`](../../tree/dpdk) | DPDK `rte_eth_rx_burst` — no syscalls | Layer 2 — custom ARP/IP/TCP | 15,399 | **50,753** |
 | [`l2_impl`](../../tree/l2_impl) | Linux TAP device (`tap0`) | Layer 2 — custom ARP/IP/TCP | 14,440 | 39,417 |
 
@@ -50,7 +50,7 @@ Earlier runs saturated the NIC RX ring faster than the CPU could drain it, so th
 
 | Branch | Connections | Req/sec | Avg latency | Max latency | Timeouts |
 |---|---|---|---|---|---|
-| `l4_impl` | 100 | **21,948** | 19.83 ms | 1.95 s | 52 |
+| `l4_impl` | 200 | **14,631** | 94.94 ms | 4.12 s | 0 |
 | `dpdk` | 200 | 12,540 | 10.16 ms | 1.09 s | 23 |
 | `dpdk` | 1000 | 15,399 | 9.25 ms | 2.06 s | 72 |
 | `l2_impl` | 200 | 12,140 | 14.39 ms | 1.56 s | 46 |

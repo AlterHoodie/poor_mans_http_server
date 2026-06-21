@@ -72,8 +72,11 @@ The profiling flamegraph referenced in the following observations is available i
 Benchmark performed using:
 
 ```bash
-# standard
+# standard c200
 wrk -t8 -c200 -d30s http://192.168.29.36:8080/ --timeout 10s
+
+# standard c1000
+wrk -t8 -c1000 -d30s http://192.168.29.36:8080/ --timeout 10s
 
 # pipelined
 wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.36:8080/
@@ -82,7 +85,7 @@ wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.36:8080/
 Results:
 
 ```
-# standard
+# standard c200
 Running 30s test @ http://192.168.29.36:8080/
   8 threads and 200 connections
   Thread Stats   Avg      Stdev     Max   +/- Stdev
@@ -90,6 +93,16 @@ Running 30s test @ http://192.168.29.36:8080/
     Req/Sec     1.87k     0.87k    3.67k    62.96%
   439876 requests in 30.06s, 31.46MB read
 Requests/sec:  14630.90
+
+# standard c1000
+Running 30s test @ http://192.168.29.36:8080/
+  8 threads and 1000 connections
+  Thread Stats   Avg      Stdev     Max   +/- Stdev
+    Latency   230.90ms  774.67ms   9.45s    93.48%
+    Req/Sec   742.62    795.66     3.95k    85.82%
+  156801 requests in 30.10s, 11.22MB read
+  Socket errors: connect 0, read 33, write 0, timeout 17
+Requests/sec:   5209.27
 
 # pipelined (all non-2xx — pipeline not supported; each batched request is treated as a new connection)
 Running 30s test @ http://192.168.29.36:8080/

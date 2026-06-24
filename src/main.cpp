@@ -151,7 +151,7 @@ int tcp_server(){
     }
 
     // Listen on socket
-    if (listen(server_fd,10)<0){ // backlog is 10 here meaning 10 conenctions will be queues before server start rejecting connections
+    if (listen(server_fd,4096)<0){ // backlog is 4096 here meaning 4096 conenctions will be queues before server start rejecting connections
         perror("listen failed");
         return 1;
     }
@@ -225,11 +225,11 @@ int tcp_server(){
     router.add_route({HttpMethod::Get, "/big"}, big_get_handler);
 
     std::cout << "Server Listening on Port 8080... \n";
-    epoll_event events[1024];
+    epoll_event events[4096];
 
     // while true - blocking
     while(true){
-        int n = epoll_wait(epfd, events, 1024, -1);
+        int n = epoll_wait(epfd, events, 4096, -1);
 
         for (int i=0; i<n; i++){
             int fd = events[i].data.fd;

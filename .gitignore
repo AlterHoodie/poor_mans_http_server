@@ -2,5 +2,6 @@
 *.so
 server
 build/
+profiles/
 .tools
 compile_commands.json

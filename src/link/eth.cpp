@@ -89,6 +89,10 @@ bool EthernetHandler::validate_dst_mac(const mac_addr_t& mac_addr){
     if (mac_addr == mac_addr_t::broadcast()) {
         return true;
     }
+    // IPv6 multicast MACs (33:33:xx:xx:xx:xx) — needed for NDP Neighbor Solicitation
+    if (mac_addr.bytes[0] == 0x33 && mac_addr.bytes[1] == 0x33) {
+        return true;
+    }
     return false;
 }
 

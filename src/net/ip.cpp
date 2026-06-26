@@ -62,6 +62,9 @@ void IPHandler::handle_packet(pkt_buff* pkt) {
     std::memcpy(pkt->ip_src, pkt->data + 12, 4);
     std::memcpy(pkt->ip_dst, pkt->data + 16, 4);
 
+    // AWS VPC proxies ARP; learn sender MAC from the Ethernet header so replies work.
+    arp_cache_.learn(ip4_addr_t(pkt->ip_src), mac_addr_t(pkt->l2_src));
+
     pull(pkt, ip_header_len);
     handler->handle_packet(pkt);
 }

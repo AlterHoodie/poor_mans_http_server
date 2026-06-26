@@ -14,6 +14,9 @@ struct pkt_buff{
 
     uint8_t *end;
 
+    // filled by Ethernet before L3 pull
+    uint8_t l2_src[6]{};
+
     // filled by the IP layer before it strips its header
     uint8_t ip_src[4]{};
     uint8_t ip_dst[4]{};

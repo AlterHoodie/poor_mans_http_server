@@ -53,7 +53,7 @@ void EthernetHandler::handle_packet(pkt_buff* buff){
         return;
     }
 
-    // consume ethernet header
+    std::memcpy(buff->l2_src, frame + 6, 6);
     pull(buff, ETH_HEADER_SIZE);
 
     // dispatch upward

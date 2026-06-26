@@ -106,6 +106,8 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     }
 
     retval = rte_eth_promiscuous_enable(port);
+    printf("promiscuous enable = %d (%s)\n",
+   retval, retval < 0 ? rte_strerror(-retval) : "OK");
     if (retval != 0) return retval;
 
 

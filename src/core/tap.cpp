@@ -5,6 +5,7 @@
 #include <cstring>
 
 #include <fcntl.h>
+#include <unistd.h>
 #include <sys/ioctl.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -65,14 +66,22 @@ int Tap::fd() const{
 }
 
 void Tap::readMacAddr(){
-    uint8_t local_mac[6] = {
-        0x02, 0x11, 0x22, 0x33, 0x44, 0x55
-    };
+    int sock = ::socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock < 0)
+        throw std::runtime_error("socket() failed in readMacAddr");
 
-    for (int i = 0; i < 6; ++i){
-        mac_[static_cast<size_t>(i)] =
-            static_cast<uint8_t>(local_mac[i]);
+    struct ifreq ifr {};
+    std::strncpy(ifr.ifr_name, ifname_.c_str(), IFNAMSIZ - 1);
+
+    if (::ioctl(sock, SIOCGIFHWADDR, &ifr) < 0) {
+        ::close(sock);
+        throw std::runtime_error("SIOCGIFHWADDR failed: can't read TAP MAC");
     }
+    ::close(sock);
+
+    for (int i = 0; i < 6; ++i)
+        mac_[static_cast<size_t>(i)] =
+            static_cast<uint8_t>(ifr.ifr_hwaddr.sa_data[i]);
 }
 
 ssize_t Tap::transmit(pkt_buff *buff){

@@ -112,6 +112,7 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
 
 
     rte_eth_stats_reset(port);
+    printf("Reset eth stats\n");
 
     // Shorter delay is fine now — promisc is already on
     rte_delay_ms(1000);

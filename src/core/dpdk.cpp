@@ -54,13 +54,21 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
         port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
     retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
-    if (retval != 0) return retval;
+    if (retval != 0) {
+        printf("rte_eth_dev_configure = %d (%s)\n",
+       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+       return retval;
+    }
 
     // Adjust descriptor counts to what the HW supports
     const uint16_t req_rxd = nb_rxd;
     const uint16_t req_txd = nb_txd;
     retval = rte_eth_dev_adjust_nb_rx_tx_desc(port, &nb_rxd, &nb_txd);
-    if (retval != 0) return retval;
+    if (retval != 0) {
+        printf("adjust_desc = %d (%s)\n",
+       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+       return retval;
+    }
 
     printf("DPDK port %u: driver=%s\n", port, dev_info.driver_name);
     printf("  RX descriptors: requested=%u  actual=%u\n", req_rxd, nb_rxd);
@@ -76,18 +84,30 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     retval = rte_eth_rx_queue_setup(port, 0, nb_rxd,
                                     rte_eth_dev_socket_id(port),
                                     &rxconf, mbuf_pool);
-    if (retval != 0) return retval;
+    if (retval != 0) {
+        printf("rx_queue_setup = %d (%s)\n",
+       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+       return retval;
+    }
 
     retval = rte_eth_tx_queue_setup(port, 0, nb_txd,
                                     rte_eth_dev_socket_id(port), NULL);
-    if (retval != 0) return retval;
+    if (retval != 0) {
+        printf("tx_queue_setup = %d (%s)\n",
+       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+       return retval;
+    }
 
-    // Enable promiscuous BEFORE starting the port
+    retval = rte_eth_dev_start(port);
+    if (retval != 0) {
+        printf("dev_start = %d (%s)\n",
+       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+       return retval;
+    }
+
     retval = rte_eth_promiscuous_enable(port);
     if (retval != 0) return retval;
 
-    retval = rte_eth_dev_start(port);
-    if (retval != 0) return retval;
 
     rte_eth_stats_reset(port);
 

@@ -44,9 +44,9 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     memset(&port_conf, 0, sizeof(struct rte_eth_conf));
 
     retval = rte_eth_dev_info_get(port, &dev_info);
+    printf("Error getting device info (port %u): %s\n",
+           port, strerror(-retval));
     if (retval != 0) {
-        printf("Error getting device info (port %u): %s\n",
-               port, strerror(-retval));
         return retval;
     }
 
@@ -54,9 +54,9 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
         port_conf.txmode.offloads |= RTE_ETH_TX_OFFLOAD_MBUF_FAST_FREE;
 
     retval = rte_eth_dev_configure(port, rx_rings, tx_rings, &port_conf);
+    printf("rte_eth_dev_configure = %d (%s)\n",
+        retval, retval < 0 ? rte_strerror(-retval) : "OK");
     if (retval != 0) {
-        printf("rte_eth_dev_configure = %d (%s)\n",
-       retval, retval < 0 ? rte_strerror(-retval) : "OK");
        return retval;
     }
 
@@ -64,9 +64,9 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     const uint16_t req_rxd = nb_rxd;
     const uint16_t req_txd = nb_txd;
     retval = rte_eth_dev_adjust_nb_rx_tx_desc(port, &nb_rxd, &nb_txd);
+    printf("adjust_desc = %d (%s)\n",
+        retval, retval < 0 ? rte_strerror(-retval) : "OK");
     if (retval != 0) {
-        printf("adjust_desc = %d (%s)\n",
-       retval, retval < 0 ? rte_strerror(-retval) : "OK");
        return retval;
     }
 
@@ -84,24 +84,24 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     retval = rte_eth_rx_queue_setup(port, 0, nb_rxd,
                                     rte_eth_dev_socket_id(port),
                                     &rxconf, mbuf_pool);
-    if (retval < 0) {
-        printf("rx_queue_setup = %d (%s)\n",
-       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    printf("rx_queue_setup = %d (%s)\n",
+        retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    if (retval != 0) {
        return retval;
     }
 
     retval = rte_eth_tx_queue_setup(port, 0, nb_txd,
                                     rte_eth_dev_socket_id(port), NULL);
-    if (retval < 0) {
-        printf("tx_queue_setup = %d (%s)\n",
-       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    printf("tx_queue_setup = %d (%s)\n",
+        retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    if (retval != 0) {
        return retval;
     }
 
     retval = rte_eth_dev_start(port);
-    if (retval < 0) {
-        printf("dev_start = %d (%s)\n",
-       retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    printf("dev_start = %d (%s)\n",
+   retval, retval < 0 ? rte_strerror(-retval) : "OK");
+    if (retval != 0) {
        return retval;
     }
 

@@ -76,6 +76,46 @@ struct ip4_addr_t {
     auto operator<=>(const ip4_addr_t&) const = default;
 };
 
+struct ip6_addr_t {
+    std::array<std::uint8_t, 16> bytes{};
+
+    ip6_addr_t() = default;
+
+    explicit ip6_addr_t(const std::uint8_t* p) noexcept {
+        std::copy_n(p, 16, bytes.begin());
+    }
+
+    explicit ip6_addr_t(std::span<const std::uint8_t, 16> s) noexcept {
+        std::copy(s.begin(), s.end(), bytes.begin());
+    }
+
+    constexpr ip6_addr_t(std::uint16_t a, std::uint16_t b, std::uint16_t c, std::uint16_t d,
+                         std::uint16_t e, std::uint16_t f, std::uint16_t g,
+                         std::uint16_t h) noexcept
+        : bytes{
+              static_cast<std::uint8_t>(a >> 8), static_cast<std::uint8_t>(a),
+              static_cast<std::uint8_t>(b >> 8), static_cast<std::uint8_t>(b),
+              static_cast<std::uint8_t>(c >> 8), static_cast<std::uint8_t>(c),
+              static_cast<std::uint8_t>(d >> 8), static_cast<std::uint8_t>(d),
+              static_cast<std::uint8_t>(e >> 8), static_cast<std::uint8_t>(e),
+              static_cast<std::uint8_t>(f >> 8), static_cast<std::uint8_t>(f),
+              static_cast<std::uint8_t>(g >> 8), static_cast<std::uint8_t>(g),
+              static_cast<std::uint8_t>(h >> 8), static_cast<std::uint8_t>(h),
+          } {}
+
+    [[nodiscard]] const std::uint8_t* data() const noexcept { return bytes.data(); }
+    [[nodiscard]] std::uint8_t* data() noexcept { return bytes.data(); }
+
+    [[nodiscard]] bool is_unspecified() const noexcept {
+        for (std::uint8_t b : bytes) {
+            if (b != 0) return false;
+        }
+        return true;
+    }
+
+    auto operator<=>(const ip6_addr_t&) const = default;
+};
+
 inline std::ostream& operator<<(std::ostream& os, const mac_addr_t& m) {
     const auto f = os.flags();
     const auto fill = os.fill();
@@ -99,6 +139,19 @@ inline std::ostream& operator<<(std::ostream& os, const ip4_addr_t& a) {
         }
         os << static_cast<unsigned>(a.bytes[i]);
     }
+    return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os, const ip6_addr_t& a) {
+    const auto f = os.flags();
+    for (std::size_t i = 0; i < 8; ++i) {
+        if (i != 0) os << ':';
+        const std::uint16_t hextet =
+            (static_cast<std::uint16_t>(a.bytes[i * 2]) << 8) | a.bytes[i * 2 + 1];
+        os << std::hex << hextet;
+    }
+    os.flags(f);
+    os << std::dec;
     return os;
 }
 
@@ -138,6 +191,17 @@ struct hash<mac_addr_t> {
 template <>
 struct hash<ip4_addr_t> {
     std::size_t operator()(const ip4_addr_t& a) const noexcept {
+        std::size_t h = 0;
+        for (std::uint8_t b : a.bytes) {
+            h = h * 131u + static_cast<std::size_t>(b);
+        }
+        return h;
+    }
+};
+
+template <>
+struct hash<ip6_addr_t> {
+    std::size_t operator()(const ip6_addr_t& a) const noexcept {
         std::size_t h = 0;
         for (std::uint8_t b : a.bytes) {
             h = h * 131u + static_cast<std::size_t>(b);

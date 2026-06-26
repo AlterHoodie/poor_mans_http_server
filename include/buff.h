@@ -17,9 +17,15 @@ struct pkt_buff{
 
     struct rte_mbuf *native_handle = nullptr;
 
+    // filled by Ethernet before L3 pull
+    uint8_t l2_src[6]{};
+
     // filled by the IP layer before it strips its header
+    bool    is_v6{false};
     uint8_t ip_src[4]{};
     uint8_t ip_dst[4]{};
+    uint8_t ip6_src[16]{};
+    uint8_t ip6_dst[16]{};
 
     std::size_t len() const {
         return tail - data;

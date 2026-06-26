@@ -61,6 +61,7 @@ void IPHandler::handle_packet(pkt_buff* pkt) {
 
     std::memcpy(pkt->ip_src, pkt->data + 12, 4);
     std::memcpy(pkt->ip_dst, pkt->data + 16, 4);
+    pkt->is_v6 = false;
 
     pull(pkt, ip_header_len);
     handler->handle_packet(pkt);

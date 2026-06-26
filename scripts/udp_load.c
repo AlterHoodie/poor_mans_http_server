@@ -6,6 +6,7 @@
  *
  * Examples:
  *   ./udp_load 192.168.29.36 9000 2000000
+ *   ./udp_load 2405:201:d000:f0b2:1e1b:dff:fea0:81ab 9000 2000000
  *   ./udp_load 192.168.29.36 9000 2000000 --procs 2
  *
  * Tick layout matches include/tick.h (28 bytes).
@@ -39,6 +40,12 @@ struct __attribute__((packed)) tick {
 	int32_t qty;
 };
 
+struct dst_addr {
+	int sa_family;
+	struct sockaddr_storage storage;
+	socklen_t len;
+};
+
 static uint64_t nsec_now(void)
 {
 	struct timespec ts;
@@ -46,8 +53,50 @@ static uint64_t nsec_now(void)
 	return (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
 }
 
+static int parse_host(const char *host, int port, struct dst_addr *out)
+{
+	char addr[INET6_ADDRSTRLEN];
+	const char *parse = host;
+
+	if (host[0] == '[') {
+		const char *end = strchr(host, ']');
+		if (!end || end == host + 1)
+			return -1;
+		size_t n = (size_t)(end - host - 1);
+		if (n >= sizeof(addr))
+			return -1;
+		memcpy(addr, host + 1, n);
+		addr[n] = '\0';
+		parse = addr;
+	}
+
+	memset(&out->storage, 0, sizeof(out->storage));
+	out->len = 0;
+
+	if (strchr(parse, ':') != NULL) {
+		struct sockaddr_in6 *in6 =
+			(struct sockaddr_in6 *)&out->storage;
+		in6->sin6_family = AF_INET6;
+		in6->sin6_port = htons((uint16_t)port);
+		if (inet_pton(AF_INET6, parse, &in6->sin6_addr) != 1)
+			return -1;
+		out->sa_family = AF_INET6;
+		out->len = sizeof(*in6);
+		return 0;
+	}
+
+	struct sockaddr_in *in4 = (struct sockaddr_in *)&out->storage;
+	in4->sin_family = AF_INET;
+	in4->sin_port = htons((uint16_t)port);
+	if (inet_pton(AF_INET, parse, &in4->sin_addr) != 1)
+		return -1;
+	out->sa_family = AF_INET;
+	out->len = sizeof(*in4);
+	return 0;
+}
+
 static int send_batch(int fd, struct mmsghdr *msgs, struct tick *ticks,
-		      uint64_t start_seq, int n, const struct sockaddr_in *dst)
+		      uint64_t start_seq, int n, const struct dst_addr *dst)
 {
 	for (int i = 0; i < n; i++) {
 		ticks[i].seq = start_seq + (uint64_t)i;
@@ -55,8 +104,8 @@ static int send_batch(int fd, struct mmsghdr *msgs, struct tick *ticks,
 		ticks[i].symbol_id = 1;
 		ticks[i].price = 10050 + (int32_t)ticks[i].seq;
 		ticks[i].qty = 100;
-		msgs[i].msg_hdr.msg_name = (void *)dst;
-		msgs[i].msg_hdr.msg_namelen = sizeof(*dst);
+		msgs[i].msg_hdr.msg_name = (void *)&dst->storage;
+		msgs[i].msg_hdr.msg_namelen = dst->len;
 		msgs[i].msg_len = TICK_SIZE;
 	}
 	return sendmmsg(fd, msgs, (unsigned int)n, 0);
@@ -65,7 +114,13 @@ static int send_batch(int fd, struct mmsghdr *msgs, struct tick *ticks,
 static uint64_t run_sender(const char *host, int port, uint64_t count,
 			   uint64_t seq_start)
 {
-	int fd = socket(AF_INET, SOCK_DGRAM, 0);
+	struct dst_addr dst;
+	if (parse_host(host, port, &dst) != 0) {
+		fprintf(stderr, "bad host: %s\n", host);
+		exit(1);
+	}
+
+	int fd = socket(dst.sa_family, SOCK_DGRAM, 0);
 	if (fd < 0) {
 		perror("socket");
 		exit(1);
@@ -73,14 +128,6 @@ static uint64_t run_sender(const char *host, int port, uint64_t count,
 
 	int sndbuf = SNDBUF;
 	setsockopt(fd, SOL_SOCKET, SO_SNDBUF, &sndbuf, sizeof(sndbuf));
-
-	struct sockaddr_in dst = {0};
-	dst.sin_family = AF_INET;
-	dst.sin_port = htons((uint16_t)port);
-	if (inet_pton(AF_INET, host, &dst.sin_addr) != 1) {
-		fprintf(stderr, "bad host: %s\n", host);
-		exit(1);
-	}
 
 	struct tick ticks[BATCH];
 	struct iovec iov[BATCH];
@@ -122,7 +169,8 @@ int main(int argc, char **argv)
 {
 	if (argc < 4) {
 		fprintf(stderr,
-			"usage: %s <host> <port> <count> [--procs N]\n",
+			"usage: %s <host> <port> <count> [--procs N]\n"
+			"  host: IPv4 dotted-quad or IPv6 address (brackets optional)\n",
 			argv[0]);
 		return 1;
 	}

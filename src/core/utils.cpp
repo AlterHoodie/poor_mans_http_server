@@ -1,8 +1,10 @@
 #include <bit>
 
 #include "utils.h"
+
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iomanip>
 #include <iostream>
 
@@ -88,4 +90,56 @@ uint16_t internet_checksum(const uint8_t* data, size_t len) {
     }
 
     return static_cast<uint16_t>(~sum);
+}
+
+uint16_t transport_checksum(const uint8_t* pseudo, size_t pseudo_len,
+                            const uint8_t* segment, size_t seg_len)
+{
+    uint32_t sum = 0;
+
+    auto accumulate = [&](const uint8_t* buf, size_t len) {
+        while (len > 1) {
+            sum += (static_cast<uint32_t>(buf[0]) << 8) | buf[1];
+            buf += 2;
+            len -= 2;
+        }
+        if (len == 1) sum += static_cast<uint32_t>(buf[0]) << 8;
+    };
+
+    accumulate(pseudo, pseudo_len);
+    accumulate(segment, seg_len);
+
+    while (sum >> 16) {
+        sum = (sum & 0xFFFF) + (sum >> 16);
+    }
+
+    return static_cast<uint16_t>(~sum);
+}
+
+void build_ipv4_pseudo_header(uint8_t out[12], const uint8_t* src_ip,
+                              const uint8_t* dst_ip, uint16_t seg_len,
+                              uint8_t proto)
+{
+    std::memcpy(out, src_ip, 4);
+    std::memcpy(out + 4, dst_ip, 4);
+    out[8] = 0;
+    out[9] = proto;
+    const uint16_t len_be = htons(seg_len);
+    std::memcpy(out + 10, &len_be, 2);
+}
+
+void build_ipv6_pseudo_header(uint8_t out[40], const uint8_t* src_ip,
+                              const uint8_t* dst_ip, uint32_t seg_len,
+                              uint8_t proto)
+{
+    std::memcpy(out, src_ip, 16);
+    std::memcpy(out + 16, dst_ip, 16);
+    out[32] = static_cast<uint8_t>((seg_len >> 24) & 0xFF);
+    out[33] = static_cast<uint8_t>((seg_len >> 16) & 0xFF);
+    out[34] = static_cast<uint8_t>((seg_len >> 8) & 0xFF);
+    out[35] = static_cast<uint8_t>(seg_len & 0xFF);
+    out[36] = 0;
+    out[37] = 0;
+    out[38] = 0;
+    out[39] = proto;
 }

@@ -10,6 +10,7 @@
 #include <unordered_map>
 #include <rte_common.h>
 #include <rte_eal.h>
+#include <rte_prefetch.h>
 #include <csignal>
 
 #include "arp.h"
@@ -19,7 +20,10 @@
 #include "eth.h"
 #include "http_types.h"
 #include "icmp.h"
+#include "icmp6.h"
 #include "ip.h"
+#include "ip6.h"
+#include "ndp_cache.h"
 #include "net_addr.h"
 #include "parser.h"
 #include "request.h"
@@ -61,28 +65,59 @@ void pump_connection(HTTPConnection &conn, Router &router){
     }
 }
 
+static void reset_pkt_addrs(pkt_buff& pkt) {
+    pkt.is_v6 = false;
+    pkt.ip_src[0] = pkt.ip_dst[0] = 0;
+}
+
+static void wire_dual_stack(EthernetHandler& eth,
+                            IPHandler& ip4,
+                            IP6Handler& ip6,
+                            ARPHandler& arp,
+                            ICMPHandler& icmp4,
+                            ICMP6Handler& icmp6,
+                            ProtocolHandler& l4)
+{
+    eth.register_protocol(0x0806, arp);
+    eth.register_protocol(0x0800, ip4);
+    eth.register_protocol(0x86DD, ip6);
+
+    ip4.register_protocol(static_cast<uint8_t>(IPProto::ICMP), icmp4);
+    ip4.register_protocol(static_cast<uint8_t>(IPProto::TCP),  l4);
+    ip4.register_protocol(static_cast<uint8_t>(IPProto::UDP),  l4);
+
+    ip6.register_protocol(static_cast<uint8_t>(IPProto::ICMPv6), icmp6);
+    ip6.register_protocol(static_cast<uint8_t>(IPProto::TCP),    l4);
+    ip6.register_protocol(static_cast<uint8_t>(IPProto::UDP),    l4);
+}
+
 // ── TCP / HTTP server ────────────────────────────────────────────────────────
 
 static int run_http_server(Dpdk& dpdk) {
     const uint8_t* x = dpdk.mac();
     mac_addr_t mac(x);
     ip4_addr_t ip(192, 168, 29, 36);
+    ip6_addr_t ip6(0x2405, 0x0201, 0xd000, 0xf0b2,
+                   0x1e1b, 0x0dff, 0xfea0, 0x81ab);
     print_mac(x);
 
     buff_pool_init(dpdk.pool());
 
     ArpCache arp_cache;
+    NdpCache ndp_cache;
 
     EthernetHandler eth_handler(mac, dpdk);
-    ARPHandler  arp_handler(mac, ip, eth_handler, arp_cache);
-    IPHandler   ip_handler(ip, eth_handler, arp_cache);
-    ICMPHandler icmp_handler(ip_handler);
-    TCPHandler  tcp_handler(ip_handler);
+    ARPHandler   arp_handler(mac, ip, eth_handler, arp_cache);
+    IPHandler    ip_handler(ip, eth_handler, arp_cache);
+    IP6Handler   ip6_handler(ip6, eth_handler, ndp_cache);
+    ICMPHandler  icmp_handler(ip_handler);
+    ICMP6Handler icmp6_handler(mac, ip6, ip6_handler, ndp_cache);
+    TCPHandler   tcp_handler(ip_handler, ip6_handler);
 
-    eth_handler.register_protocol(0x0806, arp_handler);
-    eth_handler.register_protocol(0x0800, ip_handler);
-    ip_handler.register_protocol(static_cast<uint8_t>(IPProto::ICMP), icmp_handler);
-    ip_handler.register_protocol(static_cast<uint8_t>(IPProto::TCP),  tcp_handler);
+    wire_dual_stack(eth_handler, ip_handler, ip6_handler,
+                    arp_handler, icmp_handler, icmp6_handler, tcp_handler);
+
+    std::cout << "HTTP server IPv4=" << ip << "  IPv6=" << ip6 << "\n";
 
     std::unordered_map<int, HTTPConnection> conns;
     Router router{};
@@ -145,12 +180,16 @@ static int run_http_server(Dpdk& dpdk) {
     pkt_buff burst[BURST];
 
     while (true) {
-        uint16_t n = dpdk.recv_burst(burst, BURST);
-        for (uint16_t i = 0; i < n; i++) {
-            burst[i].ip_src[0] = burst[i].ip_dst[0] = 0;
-            eth_handler.handle_packet(&burst[i]);
+        uint16_t n;
+        while ((n = dpdk.recv_burst(burst, BURST)) > 0) {
+            for (uint16_t i = 0; i < n; i++) {
+                if (i + 1 < n)
+                    rte_prefetch0(burst[i + 1].data);
+                reset_pkt_addrs(burst[i]);
+                eth_handler.handle_packet(&burst[i]);
+            }
+            dpdk.free_burst(burst, n);
         }
-        dpdk.free_burst(burst, n);
     }
 }
 
@@ -162,28 +201,33 @@ static int run_udp_server(Dpdk& dpdk, bool echo, int work_iters) {
     const uint8_t* x = dpdk.mac();
     mac_addr_t mac(x);
     ip4_addr_t ip(192, 168, 29, 36);
+    ip6_addr_t ip6(0x2405, 0x0201, 0xd000, 0xf0b2,
+                   0x1e1b, 0x0dff, 0xfea0, 0x81ab);
     print_mac(x);
 
     buff_pool_init(dpdk.pool());
 
     ArpCache arp_cache;
+    NdpCache ndp_cache;
 
     EthernetHandler eth_handler(mac, dpdk);
-    ARPHandler  arp_handler(mac, ip, eth_handler, arp_cache);
-    IPHandler   ip_handler(ip, eth_handler, arp_cache);
-    ICMPHandler icmp_handler(ip_handler);
-    UDPHandler  udp_handler(ip_handler);
+    ARPHandler   arp_handler(mac, ip, eth_handler, arp_cache);
+    IPHandler    ip_handler(ip, eth_handler, arp_cache);
+    IP6Handler   ip6_handler(ip6, eth_handler, ndp_cache);
+    ICMPHandler  icmp_handler(ip_handler);
+    ICMP6Handler icmp6_handler(mac, ip6, ip6_handler, ndp_cache);
+    UDPHandler   udp_handler(ip_handler, ip6_handler);
 
-    eth_handler.register_protocol(0x0806, arp_handler);
-    eth_handler.register_protocol(0x0800, ip_handler);
-    ip_handler.register_protocol(static_cast<uint8_t>(IPProto::ICMP), icmp_handler);
-    ip_handler.register_protocol(static_cast<uint8_t>(IPProto::UDP),  udp_handler);
+    wire_dual_stack(eth_handler, ip_handler, ip6_handler,
+                    arp_handler, icmp_handler, icmp6_handler, udp_handler);
 
     udp_handler.udp_bind(9000);
     udp_handler.set_echo(echo);
     udp_handler.set_work_iters(work_iters);
 
     std::cout << "UDP server listening on port 9000"
+              << "  IPv4=" << ip
+              << "  IPv6=" << ip6
               << (echo ? " [echo mode]" : "")
               << (work_iters > 0 ? " [work-iters=" + std::to_string(work_iters) + "]" : "")
               << "\n";
@@ -201,6 +245,8 @@ static int run_udp_server(Dpdk& dpdk, bool echo, int work_iters) {
             std::cout << "pps=" << static_cast<uint64_t>(pps)
                       << "  total_ticks=" << cur
                       << "  gaps=" << udp_handler.stats.gaps.load(std::memory_order_relaxed)
+                      << "  bad_size=" << udp_handler.bad_size
+                      << "  hdr_drop=" << udp_handler.hdr_drop
                       << "\n";
             prev = cur;
             prev_time = now;
@@ -211,12 +257,16 @@ static int run_udp_server(Dpdk& dpdk, bool echo, int work_iters) {
     pkt_buff burst[BURST];
 
     while (!g_stop) {
-        uint16_t n = dpdk.recv_burst(burst, BURST);
-        for (uint16_t i = 0; i < n; i++) {
-            burst[i].ip_src[0] = burst[i].ip_dst[0] = 0;
-            eth_handler.handle_packet(&burst[i]);
+        uint16_t n;
+        while ((n = dpdk.recv_burst(burst, BURST)) > 0) {
+            for (uint16_t i = 0; i < n; i++) {
+                if (i + 1 < n)
+                    rte_prefetch0(burst[i + 1].data);
+                reset_pkt_addrs(burst[i]);
+                eth_handler.handle_packet(&burst[i]);
+            }
+            dpdk.free_burst(burst, n);
         }
-        dpdk.free_burst(burst, n);
     }
 
     reporter.join();
@@ -225,7 +275,10 @@ static int run_udp_server(Dpdk& dpdk, bool echo, int work_iters) {
               << "ticks="    << udp_handler.stats.ticks.load(std::memory_order_relaxed)
               << "  gaps="   << udp_handler.stats.gaps.load(std::memory_order_relaxed)
               << "  last_seq=" << udp_handler.stats.last_seq
-              << "  bad_size=" << udp_handler.bad_size << "\n";
+              << "  bad_size=" << udp_handler.bad_size
+              << "  hdr_drop=" << udp_handler.hdr_drop << "\n";
+
+    dpdk.print_stats();
 
     return 0;
 }

@@ -11,9 +11,10 @@
 #include <unordered_map>
 
 enum class IPProto: uint8_t {
-    ICMP = 0x01,
-    TCP  = 0x06,
-    UDP  = 0x11,
+    ICMP   = 0x01,
+    TCP    = 0x06,
+    UDP    = 0x11,
+    ICMPv6 = 0x3A,
 };
 
 class IPHandler: public ProtocolHandler{

@@ -5,13 +5,13 @@
 
 #include <cstdint>
 
-#define NUM_MBUFS 8191
+#define NUM_MBUFS 16383
 #define MBUF_CACHE_SIZE 250
 
-#define BURST_SIZE 64
+#define BURST_SIZE 128
 
 #define RX_RING_SIZE 2048
-#define TX_RING_SIZE 2048
+#define TX_RING_SIZE 512
 
 class Dpdk {
 public:
@@ -24,6 +24,7 @@ public:
     void free_burst(pkt_buff* pkts, uint16_t n);
     ssize_t      transmit(pkt_buff* buff);
     rte_mempool* pool() {return mbuf_pool_;};
+    void         print_stats() const;
 
 private:
     uint16_t port_id_ = 0;

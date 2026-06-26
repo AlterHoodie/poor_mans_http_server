@@ -8,55 +8,14 @@
 
 #include "buff.h"
 #include "ip.h"
+#include "ip6.h"
 #include "net_addr.h"
 #include "tcp.h"
 #include "utils.h"
 
 
-// Builds a 12-byte TCP pseudo-header into `out`.
-// src_ip / dst_ip are raw 4-byte arrays, tcp_len is the TCP segment length in bytes.
-static void build_pseudo_header(uint8_t out[12],
-                                const uint8_t* src_ip,
-                                const uint8_t* dst_ip,
-                                uint16_t        tcp_len)
-{
-    std::memcpy(out,      src_ip, 4);
-    std::memcpy(out + 4,  dst_ip, 4);
-    out[8]  = 0;
-    out[9]  = static_cast<uint8_t>(IPProto::TCP);
-    uint16_t len_be = htons(tcp_len);
-    std::memcpy(out + 10, &len_be, 2);
-}
-
-// Computes TCP checksum over pseudo-header + TCP segment (non-contiguous).
-// Folds the two partial sums together using the same one's-complement logic.
-static uint16_t tcp_checksum(const uint8_t* pseudo,  size_t pseudo_len,
-                              const uint8_t* segment, size_t seg_len)
-{
-    uint32_t sum = 0;
-
-    auto accumulate = [&](const uint8_t* buf, size_t len) {
-        while (len > 1) {
-            sum += (uint32_t(buf[0]) << 8) | buf[1];
-            buf += 2;
-            len -= 2;
-        }
-        if (len == 1) {
-            sum += uint32_t(buf[0]) << 8;
-        }
-    };
-
-    accumulate(pseudo,  pseudo_len);
-    accumulate(segment, seg_len);
-
-    while (sum >> 16) {
-        sum = (sum & 0xFFFF) + (sum >> 16);
-    }
-    return static_cast<uint16_t>(~sum);
-}
-
-
-TCPHandler::TCPHandler(IPHandler& below) : below_(below) {}
+TCPHandler::TCPHandler(IPHandler& ip4, IP6Handler& ip6)
+    : ip4_(ip4), ip6_(ip6) {}
 
 void TCPHandler::handle_syn_rcvd(uint8_t flags, uint32_t ack_num, TCPSocket &socket){
     if (!has_flag(flags, TCPFlags::ACK)) return;
@@ -178,19 +137,34 @@ void TCPHandler::handle_packet(pkt_buff* pkt) {
     pkt->data[17] = 0;
 
     uint8_t pseudo[12];
-    build_pseudo_header(pseudo, pkt->ip_src, pkt->ip_dst,
-                        static_cast<uint16_t>(pkt->len()));
-    if (tcp_checksum(pseudo, 12, pkt->data, pkt->len()) != orig_csum) return;
+    uint8_t pseudo6[40];
+    if (pkt->is_v6) {
+        build_ipv6_pseudo_header(pseudo6, pkt->ip6_src, pkt->ip6_dst,
+                                 static_cast<uint32_t>(pkt->len()),
+                                 static_cast<uint8_t>(IPProto::TCP));
+        if (transport_checksum(pseudo6, 40, pkt->data, pkt->len()) != orig_csum) return;
+    } else {
+        build_ipv4_pseudo_header(pseudo, pkt->ip_src, pkt->ip_dst,
+                                  static_cast<uint16_t>(pkt->len()),
+                                  static_cast<uint8_t>(IPProto::TCP));
+        if (transport_checksum(pseudo, 12, pkt->data, pkt->len()) != orig_csum) return;
+    }
 
     // Restore checksum
     pkt->data[16] = orig_csum >> 8;
     pkt->data[17] = orig_csum & 0xFF;
 
     ConnKey key{};
-    key.src_ip   = ip4_addr_t(pkt->ip_src);
+    key.is_v6    = pkt->is_v6;
     key.src_port = src_port;
-    key.dst_ip   = ip4_addr_t(pkt->ip_dst);
     key.dst_port = dst_port;
+    if (pkt->is_v6) {
+        key.src_ip6 = ip6_addr_t(pkt->ip6_src);
+        key.dst_ip6 = ip6_addr_t(pkt->ip6_dst);
+    } else {
+        key.src_ip4 = ip4_addr_t(pkt->ip_src);
+        key.dst_ip4 = ip4_addr_t(pkt->ip_dst);
+    }
 
     // Existing connection
     auto it = conn_table_.find(key);
@@ -251,7 +225,8 @@ ssize_t TCPHandler::transmit(pkt_buff* pkt, TCPSocket& socket, TCPFlags flags) {
     constexpr uint8_t  DATA_OFFSET = 5 << 4;   // 20-byte header, no options
     constexpr uint16_t WINDOW      = 65535;
 
-    uint8_t       pseudo[12];
+    uint8_t pseudo[12];
+    uint8_t pseudo6[40];
     auto&         send_data = socket.send_buf.data;
 
     auto write_tcp_header = [&]() {
@@ -282,10 +257,19 @@ ssize_t TCPHandler::transmit(pkt_buff* pkt, TCPSocket& socket, TCPFlags flags) {
 
     auto finalize_and_send = [&]() -> ssize_t {
         const uint16_t seg_len = static_cast<uint16_t>(pkt->tail - pkt->data);
-        build_pseudo_header(pseudo, pkt->ip_dst, pkt->ip_src, seg_len);
-        uint16_t csum = htons(tcp_checksum(pseudo, 12, pkt->data, seg_len));
+        uint16_t csum = 0;
+        if (pkt->is_v6) {
+            build_ipv6_pseudo_header(pseudo6, pkt->ip6_dst, pkt->ip6_src,
+                                     seg_len, static_cast<uint8_t>(IPProto::TCP));
+            csum = htons(transport_checksum(pseudo6, 40, pkt->data, seg_len));
+        } else {
+            build_ipv4_pseudo_header(pseudo, pkt->ip_dst, pkt->ip_src, seg_len,
+                                      static_cast<uint8_t>(IPProto::TCP));
+            csum = htons(transport_checksum(pseudo, 12, pkt->data, seg_len));
+        }
         std::memcpy(pkt->data + 16, &csum, 2);
-        return below_.transmit(pkt, IPProto::TCP);
+        return pkt->is_v6 ? ip6_.transmit(pkt, IPProto::TCP)
+                          : ip4_.transmit(pkt, IPProto::TCP);
     };
 
     // SYN/ACK, FIN-only, RST, pure ACK — no queued application data.
@@ -364,11 +348,17 @@ ssize_t TCPHandler::send_segment(TCPSocket& socket, TCPFlags flags){
     auto buff_u = create_buffer();
     pkt_buff* pkt = buff_u.get();
 
-    pkt->data = pkt->head + 34;
+    pkt->is_v6 = socket.key.is_v6;
+    pkt->data = pkt->head + (pkt->is_v6 ? 54 : 34);
     pkt->tail = pkt->data;
 
-    std::memcpy(pkt->ip_src, socket.key.src_ip.data(), 4);
-    std::memcpy(pkt->ip_dst, socket.key.dst_ip.data(), 4);
+    if (pkt->is_v6) {
+        std::memcpy(pkt->ip6_src, socket.key.src_ip6.data(), 16);
+        std::memcpy(pkt->ip6_dst, socket.key.dst_ip6.data(), 16);
+    } else {
+        std::memcpy(pkt->ip_src, socket.key.src_ip4.data(), 4);
+        std::memcpy(pkt->ip_dst, socket.key.dst_ip4.data(), 4);
+    }
 
     ssize_t r = transmit(pkt, socket, flags);
 

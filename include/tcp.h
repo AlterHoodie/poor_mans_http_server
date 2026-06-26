@@ -11,23 +11,37 @@
 #include "buff.h"
 #include "handler.h"
 #include "ip.h"
+#include "ip6.h"
 #include "net_addr.h"
 
 
 struct ConnKey {
-    ip4_addr_t src_ip, dst_ip;
-    uint16_t   src_port, dst_port;
+    bool       is_v6{false};
+    ip4_addr_t src_ip4{}, dst_ip4{};
+    ip6_addr_t src_ip6{}, dst_ip6{};
+    uint16_t   src_port{0}, dst_port{0};
 
-    bool operator==(const ConnKey&) const = default;
+    bool operator==(const ConnKey& o) const {
+        if (is_v6 != o.is_v6 || src_port != o.src_port || dst_port != o.dst_port) {
+            return false;
+        }
+        return is_v6 ? (src_ip6 == o.src_ip6 && dst_ip6 == o.dst_ip6)
+                     : (src_ip4 == o.src_ip4 && dst_ip4 == o.dst_ip4);
+    }
 };
 
 namespace std {
     template <>
     struct hash<ConnKey> {
         size_t operator()(const ConnKey& k) const noexcept {
-            size_t h = 0;
-            for (uint8_t b : k.src_ip.bytes) h = h * 131u + b;
-            for (uint8_t b : k.dst_ip.bytes) h = h * 131u + b;
+            size_t h = k.is_v6 ? 1 : 0;
+            if (k.is_v6) {
+                for (uint8_t b : k.src_ip6.bytes) h = h * 131u + b;
+                for (uint8_t b : k.dst_ip6.bytes) h = h * 131u + b;
+            } else {
+                for (uint8_t b : k.src_ip4.bytes) h = h * 131u + b;
+                for (uint8_t b : k.dst_ip4.bytes) h = h * 131u + b;
+            }
             h = h * 131u + k.src_port;
             h = h * 131u + k.dst_port;
             return h;
@@ -101,7 +115,8 @@ struct TCPSocket {
 
 class TCPHandler : public ProtocolHandler {
 private:
-    IPHandler& below_;
+    IPHandler&  ip4_;
+    IP6Handler& ip6_;
 
     std::unordered_map<ConnKey,   int>       conn_table_;
     std::unordered_map<int,       TCPSocket> fd_table_;
@@ -126,7 +141,7 @@ private:
     );
 
 public:
-    explicit TCPHandler(IPHandler& below);
+    TCPHandler(IPHandler& ip4, IP6Handler& ip6);
     ~TCPHandler() = default;
 
     void    handle_packet(pkt_buff* pkt) override;

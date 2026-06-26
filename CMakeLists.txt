@@ -18,7 +18,9 @@ src/core/utils.cpp
 src/link/eth.cpp
 src/link/arp.cpp
 src/net/ip.cpp
+src/net/ip6.cpp
 src/net/icmp.cpp
+src/net/icmp6.cpp
 src/transport/tcp.cpp
 src/transport/udp.cpp
 src/main.cpp

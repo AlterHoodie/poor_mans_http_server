@@ -3,6 +3,8 @@
 
 #include <cstdint>
 #include <cstring>
+#include <cinttypes>
+
 #include <rte_ether.h>
 #include <rte_ethdev.h>
 #include <sys/types.h>
@@ -55,12 +57,25 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     if (retval != 0) return retval;
 
     // Adjust descriptor counts to what the HW supports
+    const uint16_t req_rxd = nb_rxd;
+    const uint16_t req_txd = nb_txd;
     retval = rte_eth_dev_adjust_nb_rx_tx_desc(port, &nb_rxd, &nb_txd);
     if (retval != 0) return retval;
 
+    printf("DPDK port %u: driver=%s\n", port, dev_info.driver_name);
+    printf("  RX descriptors: requested=%u  actual=%u\n", req_rxd, nb_rxd);
+    printf("  TX descriptors: requested=%u  actual=%u\n", req_txd, nb_txd);
+    printf("  rx_offload_capa=0x%lx  tx_offload_capa=0x%lx\n",
+           dev_info.rx_offload_capa, dev_info.tx_offload_capa);
+    printf("  burst_size=%u  num_mbufs=%u  mbuf_cache=%u\n",
+           BURST_SIZE, NUM_MBUFS, MBUF_CACHE_SIZE);
+
+    struct rte_eth_rxconf rxconf = dev_info.default_rxconf;
+    rxconf.rx_free_thresh = 32;
+
     retval = rte_eth_rx_queue_setup(port, 0, nb_rxd,
                                     rte_eth_dev_socket_id(port),
-                                    NULL, mbuf_pool);
+                                    &rxconf, mbuf_pool);
     if (retval != 0) return retval;
 
     retval = rte_eth_tx_queue_setup(port, 0, nb_txd,
@@ -73,6 +88,8 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
 
     retval = rte_eth_dev_start(port);
     if (retval != 0) return retval;
+
+    rte_eth_stats_reset(port);
 
     // Shorter delay is fine now — promisc is already on
     rte_delay_ms(1000);
@@ -161,4 +178,21 @@ ssize_t Dpdk::transmit(pkt_buff* buff){
     uint16_t sent = rte_eth_tx_burst(port_id_, 0, &m, 1);
     if(sent>0) buff->native_handle = nullptr;
     return sent > 0 ? static_cast<ssize_t>(buff->len()) : -1;
+}
+
+void Dpdk::print_stats() const {
+    struct rte_eth_stats st{};
+    if (rte_eth_stats_get(port_id_, &st) != 0) {
+        printf("rte_eth_stats_get(port %u) failed\n", port_id_);
+        return;
+    }
+
+    printf("\n--- DPDK port stats ---\n");
+    printf("  ipackets=%" PRIu64 "  opackets=%" PRIu64
+           "  ibytes=%" PRIu64 "  obytes=%" PRIu64 "\n",
+           st.ipackets, st.opackets, st.ibytes, st.obytes);
+    printf("  imissed=%" PRIu64 "  rx_nombuf=%" PRIu64
+           "  ierrors=%" PRIu64 "  oerrors=%" PRIu64 "\n",
+           st.imissed, st.rx_nombuf, st.ierrors, st.oerrors);
+    printf("  (imissed=NIC ring overflow, rx_nombuf=mbuf pool empty)\n");
 }

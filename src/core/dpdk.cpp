@@ -84,7 +84,7 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
     retval = rte_eth_rx_queue_setup(port, 0, nb_rxd,
                                     rte_eth_dev_socket_id(port),
                                     &rxconf, mbuf_pool);
-    if (retval != 0) {
+    if (retval < 0) {
         printf("rx_queue_setup = %d (%s)\n",
        retval, retval < 0 ? rte_strerror(-retval) : "OK");
        return retval;
@@ -92,14 +92,14 @@ int Dpdk::portInit(uint16_t port, struct rte_mempool *mbuf_pool)
 
     retval = rte_eth_tx_queue_setup(port, 0, nb_txd,
                                     rte_eth_dev_socket_id(port), NULL);
-    if (retval != 0) {
+    if (retval < 0) {
         printf("tx_queue_setup = %d (%s)\n",
        retval, retval < 0 ? rte_strerror(-retval) : "OK");
        return retval;
     }
 
     retval = rte_eth_dev_start(port);
-    if (retval != 0) {
+    if (retval < 0) {
         printf("dev_start = %d (%s)\n",
        retval, retval < 0 ? rte_strerror(-retval) : "OK");
        return retval;

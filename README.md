@@ -6,12 +6,11 @@ A learning exercise exploring how an HTTP server behaves at different layers of 
 
 ## Branch Index
 
-
-| Branch                          | I/O mechanism                         | Stack starts at              | Req/sec (c200) | Req/sec (pipelined) |
-| ------------------------------- | ------------------------------------- | ---------------------------- | -------------- | ------------------- |
-| `[l4_impl](../../tree/l4_impl)` | Linux `epoll` + kernel TCP sockets    | Layer 4 — kernel owns TCP/IP | **14,631**     | —                   |
-| `[dpdk](../../tree/dpdk)`       | DPDK `rte_eth_rx_burst` - no syscalls | Layer 2 — custom ARP/IP/TCP  | 12,540         | **50,753**          |
-| `[l2_impl](../../tree/l2_impl)` | Linux TAP device (`tap0`)             | Layer 2 — custom ARP/IP/TCP  | 12,140         | 39,417              |
+| Branch                          | I/O mechanism                         | Stack starts at              | AWS req/sec (c1000) |
+| ------------------------------- | ------------------------------------- | ---------------------------- | ------------------- |
+| `[l4_impl](../../tree/l4_impl)` | Linux `epoll` + kernel TCP sockets    | Layer 4 — kernel owns TCP/IP | ~54,000             |
+| `[dpdk](../../tree/dpdk)`       | DPDK `rte_eth_rx_burst` — no syscalls | Layer 2 — custom ARP/IP/TCP  | ~120,000            |
+| `[l2_impl](../../tree/l2_impl)` | Linux TAP device (`tap0`)             | Layer 2 — custom ARP/IP/TCP  | —                   |
 
 `main` is this index only. All source code lives on the branches above.
 
@@ -35,100 +34,75 @@ epoll / syscalls         NIC (DPDK PMD)           TAP device (tap0)
 
 `l4_impl` delegates everything below HTTP to the kernel. The other two branches re-implement ARP, IPv4, ICMP, TCP, and HTTP from scratch on top of raw frames.
 
+`l2_impl` crosses the kernel boundary twice per packet (NIC → kernel → TAP fd → userspace). DPDK bypasses the kernel entirely on the data path.
+
 ---
 
 ## Benchmark Comparison
 
-### Methodology note
+### Local (home server)
 
-Earlier runs saturated the NIC RX ring faster than the CPU could drain it, so the CPU spent most of its time in a busy-wait polling loop. This masked real protocol-processing differences between the implementations. A deliberate CPU-intensive operation was added per request to shift the bottleneck off the NIC and expose per-request processing cost more clearly. Numbers below reflect that updated workload.
+Tested on a home server with a consumer RTL8169 NIC and a Wi-Fi laptop as the load generator. Locally, all three implementations land in roughly the same throughput ballpark (~8k–15k req/s depending on the run). The bottleneck is the test rig — the NIC and client cannot produce enough packets to stress any implementation — not the code itself.
 
-### Standard (no pipelining)
+### AWS VPC (c6i server, c7n load generator, same AZ)
 
-`wrk -t8 -c200 -d30s` and `wrk -t8 -c1000 -d30s`, `l4_impl` at `-t4 -c100` (different port/run):
+To separate implementations by their own merits, HTTP and UDP benchmarks were re-run in an AWS VPC with a compute-optimized server and a network-optimized load generator. Only `l4_impl` and `dpdk` were compared on AWS; the TAP-based `l2_impl` path does not work cleanly on Nitro/ENA virtualized networking (no straightforward host bridge for TAP traffic).
 
+**HTTP (`wrk -t8 -c1000 -d30s`, keep-alive):**
 
-| Branch    | Connections | Req/sec    | Avg latency | Max latency | Timeouts |
-| --------- | ----------- | ---------- | ----------- | ----------- | -------- |
-| `l4_impl` | 200         | **14,631** | 94.94 ms    | 4.12 s      | 0        |
-| `l4_impl` | 1000        | 5,209      | 230.90 ms   | 9.45 s      | 17       |
-| `dpdk`    | 200         | 12,540     | 10.16 ms    | 1.09 s      | 23       |
-| `dpdk`    | 1000        | **15,399** | 9.25 ms     | 2.06 s      | 72       |
-| `l2_impl` | 200         | 12,140     | 14.39 ms    | 1.56 s      | 46       |
-| `l2_impl` | 1000        | 14,440     | 16.66 ms    | 2.09 s      | 81       |
+| Implementation | Req/sec   | p50        | p99                          |
+| -------------- | --------- | ---------- | ---------------------------- |
+| `l4_impl`      | ~54,000   | 12–16 ms   | 35 ms – 1 s+ spikes          |
+| `dpdk`         | ~120,000  | 6.6–8.4 ms | ~6.8–8.7 ms (flat, ~15% of p50) |
 
+On AWS, DPDK delivers more than double the throughput of plain sockets, with tail latency that stays nearly flat under load. The socket server depends on the kernel scheduler, kernel TCP bookkeeping, and `write()` → `tcp_sendmsg` — each a place where multi-millisecond delay can appear under thousands of concurrent connections. DPDK has no epoll wakeup and no scheduler on the data path; a saturated userspace poll loop has nowhere for tail gaps to hide.
 
-### Pipelined (`pipeline.lua`, `wrk -t4 -c100 -d30s`)
+**UDP flood (packets/sec):**
 
+| Tier   | `l4_impl`                                      | `dpdk`                                                       |
+| ------ | ---------------------------------------------- | ------------------------------------------------------------ |
+| Local  | `recvfrom` ~50%, `epoll_wait` ~48% — idle waiting | ~72,000 pps                                                  |
+| AWS    | ~700,000 pps (kernel loss)                     | ~1,000,000 pps (ENA/instance PPS ceiling; client sent ~1.4M) |
 
-| Branch    | Req/sec    | p50 latency | p99 latency | Timeouts |
-| --------- | ---------- | ----------- | ----------- | -------- |
-| `dpdk`    | **50,753** | 15.67 ms    | —           | 64       |
-| `l2_impl` | 39,417     | 7.97 ms     | 645.87 ms   | 14       |
-
-
-### Why `l4_impl` wins on standard requests
-
-Bypassing the kernel eliminates syscall overhead, but it also throws away decades of kernel TCP tuning:
-
-- **NAPI** batches interrupt coalescing and packet processing so the kernel already amortises per-packet cost at scale.
-- **TSO/GSO/GRO** offloads let the NIC handle segmentation and reassembly in hardware — the hand-rolled stacks get none of this.
-- The kernel TCP stack has a mature congestion controller, retransmission engine, and receive-window management. The custom stacks lack all of it.
-
-For a workload that is TCP-handshake-heavy (short-lived connections, small payloads), the kernel's maturity outweighs the syscall savings.
-
-### Why DPDK wins on pipelined requests
-
-With pipelining, connection-setup overhead is amortised across many requests per connection. This exposes DPDK's actual strength: zero-copy, zero-syscall packet I/O. At 50,753 req/s DPDK is ~1.3× faster than `l2_impl` — consistent with DPDK eliminating the double kernel-boundary crossing that `l2_impl` (TAP device) still pays. `l4_impl` is excluded from this comparison as it does not support HTTP pipelining.
-
-### Why `l2_impl` is slowest on standard requests
-
-Every packet crosses the kernel boundary **twice** before reaching userspace: NIC → kernel network stack → TAP fd read → userspace. The custom TCP stack then processes frames that the kernel has already partially handled. This adds both copy overhead and scheduling latency that DPDK avoids entirely.
+The DPDK UDP plateau at ~1M pps is an AWS infrastructure limit (ENA per-instance packet rate cap), not an application bottleneck — loss stayed identical whether the client sent 1.4M or was throttled lower.
 
 ---
 
 ## Key Findings Per Branch
 
+Each branch has its own `flamegraph.svg`. Percentages below are from labeled `perf` profiles; local and AWS profiles tell different stories because the bottleneck moves once the NIC can actually keep up.
+
 ### `l4_impl`
 
-Profiled with `perf` + flamegraph. Hottest paths:
-
-- `**epoll_wait` (~26.8%)** — expected for event-driven I/O; the process spends most time blocked waiting for readiness.
-- `**accept` (~14%)** — short-lived connection churn forces a full TCP handshake + fd allocation per request. Keep-alive would shift this cost to memory.
-- `**unordered_map` (~18.3%)** — the connection table is in the hot path. File descriptors are already integers; a flat array indexed by fd would eliminate hashing and pointer chasing.
-- `**pump_connection` (~9.9%)** — string copies (`substr`, `append`) on every request. `string_view`-based parsing would make header reads zero-copy.
+- **Local c1000:** `pump_connection` 60–70%, `parse_request` ~25%, `write` 13–16%; `epoll_wait` barely registers — the thread is busy servicing ready connections.
+- **Local UDP:** `recvfrom` ~50%, `epoll_wait` ~48% — no HTTP work; the server waits for packets the client cannot push fast enough.
+- **AWS c1000:** `pump_connection` ~72% (vs ~63% local) — faster network delivers more work to the application layer; `epoll_wait` stays negligible.
 
 ### `dpdk`
 
-Profiled with `perf` + flamegraph (~20 frames total — no kernel I/O paths):
-
-- `**rtl_recv_pkts` (56.9%)** — the RTL8169 PMD draining the NIC RX ring dominated in earlier runs where the NIC was the bottleneck. With the added CPU load the processing cost is now more evenly distributed.
-- `**unique_ptr` construction/destruction (~5.9%)** — the burst loop wraps each mbuf in a `unique_ptr`. DPDK's `rte_eth_rx_burst` returns up to 32 mbufs at once; processing them as a raw array and bulk-freeing after the burst would eliminate this overhead entirely.
-- `**Connection: close` on every response** — every request pays a full 3-way SYN + FIN/ACK teardown. Keep-alive support would remove the round-trip cost and is why DPDK's advantage shows most clearly in the pipelined benchmark (50,753 req/s vs 15,399 without pipelining).
+- **Local c1000:** `rtl_recv_pkts` ~57%, poll loop ~25%, application ~2% — the cheap consumer NIC is the ceiling; TCP and HTTP barely register.
+- **AWS c1000:** ENA driver ~8–9%, `TCPHandler::handle_established` ~50%, deque/segment tx ~47% — bottleneck inverts from hardware to the hand-rolled TCP stack.
+- **Burst RX:** wrapping each mbuf in a `unique_ptr` adds ~5.9% overhead; a raw `pkt_buff*[32]` burst loop would eliminate it.
 
 ### `l2_impl`
 
-Profiled with `perf` + flamegraph:
-
-- **Socket allocation/destruction (~9.9%)** — every TCP connection heap-allocates a fresh `TCPSocket` (which holds a `std::deque`-backed queue); teardown shows up clearly. A pre-allocated socket pool would eliminate this.
-- `**unordered_map::erase` (~6.3%)** — connection-close path erases from the active connection map on every close. Combined with string allocations in `parse_request` and `build_response_string`, the HTTP layer accounts for measurable overhead despite the NIC being the real bottleneck.
-
-Each branch has its own `flamegraph.svg` with the full profile.
+- **Local c1000:** `epoll_wait` ~45%, `pump_connection` <2%, `parse_request` <1% — most time waiting on the TAP fd or doing TCP bookkeeping, not HTTP parsing.
+- **Not tested on AWS** — TAP + Nitro/ENA bridging is impractical on EC2.
 
 ---
 
 ## Test Setup
 
-`**l4_impl`** — standard Linux TCP socket on `0.0.0.0:8080`.
+**`l4_impl`** — standard Linux TCP socket on `0.0.0.0:8080`.
 
-`**dpdk`** — NIC unbound from kernel driver and handed to DPDK via `vfio-pci`. Server hardcoded to `192.168.29.36:80`.
+**`dpdk`** — NIC unbound from kernel driver and handed to DPDK via `vfio-pci`. Server hardcoded to `192.168.29.36:80`.
 
 ```sh
 modprobe vfio-pci
 dpdk-devbind --bind=vfio-pci <PCI_ADDR>
 ```
 
-`**l2_impl**` — TAP device bridged with the physical NIC. Server hardcoded to `192.168.29.12:80`.
+**`l2_impl`** — TAP device bridged with the physical NIC. Server hardcoded to `192.168.29.12:80`.
 
 ```sh
 ip link add br0 type bridge
@@ -137,3 +111,4 @@ ip link set tap0 master br0
 ip link set br0 up
 ```
 
+**AWS** — server on `c6i`, load generator on `c7n`, same VPC and availability zone.

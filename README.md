@@ -31,55 +31,24 @@ ip link set br0 up
 
 ## Benchmark
 
-> **Note:** A CPU-intensive operation was added per request so the benchmark exercises per-request processing cost rather than just busy-wait NIC polling (the NIC fills the RX ring slower than the CPU can drain it on this hardware).
+**Not tested on AWS.** Nitro/ENA virtualized networking on EC2 does not provide a straightforward host bridge for TAP traffic — after enough fighting with AWS's networking model, this path was abandoned in favor of comparing `l4_impl` and `dpdk` on AWS only.
 
-### Standard
+**Local (home server):** all three implementations (including this one) land in roughly the same ~8k–15k req/s ballpark locally. The bottleneck is the test rig, not the code. This branch is additionally penalized architecturally: every packet crosses the kernel boundary twice (NIC → kernel network stack → TAP fd read → userspace) before the hand-rolled TCP stack ever sees it.
 
-```
-wrk -t8 -c200 -d30s http://192.168.29.12/hi --timeout 10s
-Running 30s test @ http://192.168.29.12/hi
-  8 threads and 200 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    14.39ms   92.36ms   1.56s    98.01%
-    Req/Sec     1.73k     1.39k    5.27k    54.69%
-  351870 requests in 28.98s, 22.82MB read
-  Socket errors: connect 0, read 0, write 0, timeout 46
-Requests/sec:  12139.76
+## Flamegraph
 
-wrk -t8 -c1000 -d30s http://192.168.29.12/hi --timeout 10s
-Running 30s test @ http://192.168.29.12/hi
-  8 threads and 1000 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    16.66ms  115.28ms   2.09s    98.61%
-    Req/Sec     2.18k     2.19k    9.39k    75.77%
-  418214 requests in 28.96s, 27.12MB read
-  Socket errors: connect 0, read 0, write 0, timeout 81
-Requests/sec:  14439.90
-```
+Profiled with `perf` + flamegraph. See [`flamegraph.svg`](flamegraph.svg) for the full picture.
 
-### Pipelined
+**Local c1000 (HTTP):**
 
-```
-wrk -t4 -c100 -d30s --latency -s pipeline.lua http://192.168.29.12/hi
-Running 30s test @ http://192.168.29.12/hi
-  4 threads and 100 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    25.77ms   98.87ms 990.90ms   96.43%
-    Req/Sec    13.06k     8.46k   35.71k    46.16%
-  Latency Distribution
-     50%    7.97ms
-     75%   11.31ms
-     90%   15.51ms
-     99%  645.87ms
-  1141206 requests in 28.95s, 74.01MB read
-  Socket errors: connect 0, read 0, write 0, timeout 14
-Requests/sec:  39416.58
-```
+- **`epoll_wait` (~45%)** — waiting for the next frame on the TAP fd.
+- **`pump_connection` (<2%)**, **`parse_request` (<1%)** — HTTP parsing barely registers; most time is I/O wait or userspace TCP bookkeeping before bytes reach the shared HTTP code.
 
+**Local UDP:** profile collapses toward the I/O path — read a frame off the TAP fd and walk it through hand-rolled Ethernet and IP parsing, rather than asking the kernel's UDP stack for a datagram.
 
 ## Bottlenecks
 
-Profiled with `perf` + flamegraph. See [`flamegraph.svg`](flamegraph.svg) for the full picture. The two things that hurt the most:
+The two code-level improvements that would help most under load:
 
 **Socket creation/destruction (~9.9% of CPU)**
 

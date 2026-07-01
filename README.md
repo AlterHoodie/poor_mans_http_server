@@ -65,184 +65,49 @@ This repo was created to learn various systems engineering, profiling and Cpp co
 - **Parse/route in the event thread**: Long handlers block everyone; production systems often offload work.
 - **No TLS, HTTP/2, chunked encoding, etc.** — intentionally out of scope for “poor man’s” server.
 
-## Profiling Observations
+## Benchmark
 
-The profiling flamegraph referenced in the following observations is available in [flamegraph.svg](flamegraph.svg). Please consult it for a visual breakdown of CPU usage during benchmarking of the server. Hot paths are highlighted and help correlate code structure to runtime costs.
+Locally, on a home server with a Wi-Fi laptop as the load generator, this implementation lands in the same ~8k–15k req/s ballpark as the other branches — the NIC and client are the bottleneck, not the code.
 
-Benchmark performed using:
+On AWS (c6i server, c7n load generator, same VPC/AZ, `wrk -t8 -c1000 -d30s`, keep-alive):
 
-```bash
-# c200
-wrk -t8 -c200 -d30s http://192.168.29.36:8080/ --timeout 10s
+| Metric    | Value                        |
+| --------- | ---------------------------- |
+| Req/sec   | ~54,000                      |
+| p50       | 12–16 ms                     |
+| p99       | 35 ms – 1 s+ spikes          |
 
-# c1000
-wrk -t8 -c1000 -d30s http://192.168.29.36:8080/ --timeout 10s
-```
+Tail latency can stretch to ten times the median under load — the server depends on the kernel scheduler waking it from `epoll_wait`, kernel TCP bookkeeping, and `write()` → `tcp_sendmsg`, each a place where scheduling delay can appear.
 
-Results:
-
-```
-# c200
-Running 30s test @ http://192.168.29.36:8080/
-  8 threads and 200 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency    94.94ms  262.30ms   4.12s    93.70%
-    Req/Sec     1.87k     0.87k    3.67k    62.96%
-  439876 requests in 30.06s, 31.46MB read
-Requests/sec:  14630.90
-
-# c1000
-Running 30s test @ http://192.168.29.36:8080/
-  8 threads and 1000 connections
-  Thread Stats   Avg      Stdev     Max   +/- Stdev
-    Latency   230.90ms  774.67ms   9.45s    93.48%
-    Req/Sec   742.62    795.66     3.95k    85.82%
-  156801 requests in 30.10s, 11.22MB read
-  Socket errors: connect 0, read 33, write 0, timeout 17
-Requests/sec:   5209.27
-```
-
-> **Note:** A CPU-intensive operation was added per request so the benchmark exercises per-request processing cost rather than just busy-wait NIC polling (the NIC fills the RX ring slower than the CPU can drain it on this hardware).
-
-To see Memory Usage you can:
-```
-sudo apt install heaptrack-gui
-heaptrack_gui ./heaptrack.server.zst
-```
-
-### `accept` (~14%)
-
-High `accept()` overhead due to large amounts of short-lived TCP connection churn.
-Each connection requires:
-
-- socket allocation
-- TCP handshake management
-- fd creation
-- scheduler coordination
-
-Can be reduced by increasing keepalive timeout and reusing connections at the cost of higher memory/fd retention. 
-
-Basically shifts the cost from CPU to Memory, kind of like a design decision one has to make when one is building a server for a particular problem statement.
+**UDP flood (AWS):** ~700,000 packets/sec before kernel-level loss. `recvfrom` alone consumes ~92% of CPU time, with the kernel UDP stack adding more on top (softirq overlap in profiling).
 
 ---
 
-### `epoll_ctl` (~4.23%)
+## Profiling
 
-Mostly a skill issue / naive implementation issue.
+See [flamegraph.svg](flamegraph.svg) for the full profile. Percentages below are from labeled runs at concurrency 1000 unless noted.
 
-The current implementation repeatedly switches epoll interest states:
+### Local c1000 (HTTP)
 
-```text
-accept -> read (EPOLLOUT) -> epoll_ctl -> write (EPOLLIN)
-```
+- **`pump_connection` (60–70%)** — header parsing, body buffering, routing, response building.
+- **`parse_request` (~25%)** — re-parsing HTTP headers as text on every request.
+- **`write` (13–16%)** — cost of handing bytes to the kernel via `tcp_sendmsg`.
+- **`epoll_wait` (few %)** — at this concurrency the thread is almost always servicing ready connections rather than sleeping.
 
-This creates unnecessary syscall overhead due to repeated kernel epoll metadata updates.
+### Local UDP
 
-Can be optimized by:
+- **`recvfrom` (~50%)**, **`epoll_wait` (~48%)** — no HTTP work; the client cannot push packets fast enough to keep the server busy.
 
-- registering sockets once with:
+### AWS c1000 (HTTP)
 
-```cpp
-EPOLLIN | EPOLLOUT
-```
+- **`pump_connection` (~72%)** — rises from ~63% locally because the faster network path delivers more requests to the application layer per second.
+- **`epoll_wait`** — still negligible; this implementation is application and kernel-TX bound, not epoll-bound, at both sites.
 
-- maintaining read/write state in userspace instead of kernel space. Of course more application/user level code implementations and state management.
+### Improvements (still open)
 
----
-
-### `epoll_wait` (~26.76%)
-
-Expected behavior for event-driven architectures.
-
-Most of the time is spent:
-
-- blocked waiting for socket readiness events
-- sleeping/waking through scheduler coordination
-
-This is not active CPU spinning, but scheduler/syscall orchestration overhead.
-
----
-
-### `pump_connection` (~9.86%)
-
-Mainly caused by:
-
-- repeated string operations
-- `substr`
-- `append`
-- request parsing
-- unnecessary buffer copying
-
-Can be improved using:
-
-- pointer/offset based parsing
-- ring buffers
-- fewer allocations/copies
-- better buffer ownership models
-
-Another skill issue moment.
-
----
-
-### `unordered_map<fd, Connection>` (~18.31%)
-
-The connection table sits directly in the event-loop hot path.
-
-Although hash maps provide average `O(1)` lookups, they:
-
-- require hashing
-- involve pointer chasing
-- hurt cache locality
-
-Since file descriptors are already integer indexes, a contiguous array/vector indexed by fd would likely perform much better.
-
----
-
-### `write` (~8.45%)
-
-The overhead here was mostly:
-
-- syscall transitions
-- kernel TCP stack processing
-- userspace -> kernel buffer copying
-- packetization overhead
-
-rather than actual network bandwidth saturation.
-
-Small-request workloads tend to become syscall/TCP-stack bound rather than throughput bound.
-
----
-
-## Biggest Takeaway
-
-The majority of runtime was spent in:
-
-- scheduler activity
-- syscall handling
-- TCP stack coordination
-- memory movement
-
-rather than actual HTTP parsing or application logic, this is due to the nature of the test - being high throughput short-lived connections.
-
-
-
-This type of workload is common in high-frequency trading (HFT) systems where applications may process millions of exchange messages every second. At this scale, even small delays caused by syscalls and repeated switching between userspace and kernel space become expensive.
-
-To reduce this overhead, some trading systems use technologies like DPDK which allow applications to talk directly to the network card (NIC), bypassing much of the Linux kernel networking stack. This helps reduce latency and improves performance consistency.
-
-Frameworks like nginx usually do not use this approach because their workloads are dominated by things like:
-
-- TLS encryption
-
-- HTTP parsing
-
-- reverse proxying
-
-- load balancing
-
-- compression
-
-In these cases, the main bottleneck is often application-level processing rather than raw packet handling, so the normal Linux networking stack together with epoll is usually more than fast enough.
+- **`unordered_map<fd, Connection>`** — fd-indexed flat array would eliminate hashing and pointer chasing in the hot path.
+- **`pump_connection`** — `string_view`-based parsing and fewer `substr`/`append` copies on every request.
+- **`epoll_ctl`** — register sockets once with `EPOLLIN | EPOLLOUT` and track read/write state in userspace instead of toggling kernel interest per transition.
 
 ---
 
